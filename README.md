@@ -1,4 +1,4 @@
-# Dissertation Code
+# Repository Objectives
 
 This repository contains Python implementations of producer-consumer systems used in my dissertation. The objective is to simulate sequentially composed producer-consumer systems and to observe the dynamics that are produced.
 
