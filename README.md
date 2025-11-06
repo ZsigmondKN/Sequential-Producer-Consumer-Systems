@@ -4,14 +4,18 @@ This repository contains Python implementations of producer-consumer systems use
 
 ## Structure
 
-### 01_multiprocessing
+### Sequential Composition
+Implementations using Python’s `multiprocessing` library.
+- **producers_many_consumers_many.py** — Multiple producers and multiple consumers.
+
+### Multiprocessing
 Implementations using Python’s `multiprocessing` library.
 - **producer_consumer_basic.py** — Minimal single producer-consumer example.
 - **producer_consumer_busy_wait.py** — Busy waiting implementation.
 - **producer_consumer_waiting.py** — Using synchronization primitives.
 - **producers_multiple_consumers_multiple.py** — Multiple producers and consumers.
 
-### 02_multithreading
+### Multithreading
 Implementations using Python’s `threading` library.
 - **producer_consumer_one_to_one.py** — Single producer and single consumer.
 - **producer_consumer_one_to_many.py** — One producer, multiple consumers.
