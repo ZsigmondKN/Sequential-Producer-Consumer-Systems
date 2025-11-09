@@ -1,16 +1,17 @@
 from enum import Enum
 import multiprocessing
+from queue import Empty, Full
 import random
 import time
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
 
+SIMULATION_TIME_OUT_IN_SECONDS = 20
 DEFAULT_NUM_PRODUCERS = 5
 DEFAULT_NUM_CONSUMERS = 2
 MAX_QUEUE_SIZE = 20
-ITEMS_PER_PRODUCER = 10
-SENTINEL = None
+QUEUE_INTERVAL = 1
 LOG_FORMAT = "%(asctime)s - %(levelname)s: %(message)s"
 LOG_DATEFMT = "%H:%M:%S"
 
@@ -20,66 +21,66 @@ class ItemType(Enum):
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATEFMT)
 
-def producer(process_id: int, item_type: ItemType, producer_logs: list, 
-             barrier: multiprocessing.Barrier, # type: ignore
+def producer(process_id: int, item_type: ItemType, stop_event, producer_logs: list, 
              queue: multiprocessing.Queue) -> None:
-    """Run a producer process that generates a fixed number of items and places them into a shared 
-    queue.
-
-    Each process simulates the production of items by taking a random amount of time for production. 
-    When all producers have finished, a sentinel value is added to the queue. This signals to the 
-    consumers that production stopped.
-    """
-    for item_index in range(ITEMS_PER_PRODUCER):
+    """Run a producer process that generates the specified item type and places them into a queue."""
+    check_s = 0.1
+    max_check_s = 2.0
+    while not stop_event.is_set():
         production_time = round(random.random(), 2)
-        time.sleep(production_time)
-        item = (item_type.value, item_index, production_time)
-        queue.put(item)
+        time.sleep(production_time) # does it really need to sleep
+        item = (item_type.value, production_time)
+        try:
+            queue.put(item, timeout=check_s)
+        except Full:
+            check_s = min(check_s * 2, max_check_s)
+            continue
 
-        producer_logs.append((process_id, item_index, production_time, time.time()))
-        logging.info(f"Produced: {item_type.value}, over {production_time} seconds")
-        logging.debug(f"Producer with ID of: {process_id}, produced item: {item}")
+        producer_logs.append((process_id, production_time, time.time()))
+        logging.debug(f"Produced: {item_type.value}, over {production_time} seconds.")
+    logging.debug(f"Stopping {item_type.value} producer {process_id} gracefully.")
 
-    barrier.wait()
-    if process_id == 0:
-        for _ in range(DEFAULT_NUM_CONSUMERS):
-            queue.put(SENTINEL)
+def consumer(process_id: int, item_type: ItemType, stop_event, consumer_logs: list, 
+             primary_queue: multiprocessing.Queue, secondary_queue: multiprocessing.Queue = None) -> None:
+    """Run a consumer process that retrieves and processes items from the provided queue."""
+    check_s = 0.1
+    max_check_s = 2.0
+    while not stop_event.is_set():
+        try:
+            item = primary_queue.get(timeout=check_s)
+        except Empty:
+            check_s = min(check_s * 2, max_check_s)
+            continue
 
-def consumer(process_id: int, item_type: ItemType, consumer_logs: list,
-             primary_queue: multiprocessing.Queue, 
-             secondary_queue: multiprocessing.Queue = None) -> None:
-    """Run a consumer process that retrieves and processes items from the queue.
-
-    The consumer continues until it encounters the sentinel value, signaling the end of production. 
-    Each consumed item is logged with a timestamp and simulated service time.
-    """
-    while True:
-        item = primary_queue.get()
         service_time = round(random.random(), 2)
         time.sleep(service_time)
-        if item is SENTINEL:
-            if secondary_queue:
-                secondary_queue.put(SENTINEL)
-            break
         if secondary_queue:
-            secondary_queue.put((ItemType.IRON_PLATE.value, item[1], item[2])) #improve later
+            secondary_queue.put((ItemType.IRON_PLATE.value, item[1])) #improve later
 
-        consumer_logs.append((process_id, item[0], service_time, time.time()))
-        logging.info(f"Consumed: {item[0]}, over {service_time} seconds")
-        logging.debug(f"Consumer with ID of: {process_id}, processed item: {item}")
+        consumer_logs.append((process_id, service_time, time.time()))
+        logging.debug(f"Consumed: {item[0]}, over {service_time} seconds.")
+    logging.debug(f"Stopping {item_type.value} consumer {process_id} gracefully.")
 
-def track_queue_sizes(queue_iron_ingot: multiprocessing.Queue, queue_iron_plate: multiprocessing.Queue,
-                  queue_logs: list, stop_event: multiprocessing.Event) -> None: # type: ignore
+def track_queue_sizes(queue_iron_ingot: multiprocessing.Queue, queue_iron_plate: multiprocessing.Queue, 
+                      queue_logs: list, stop_event) -> None:
+    """Track and log the sizes of the queues at regular intervals."""
     while not stop_event.is_set():
         queue_logs.append((queue_iron_ingot.qsize(), queue_iron_plate.qsize(), time.time()))
-        logging.info(f"Queue sizes - Iron Ingots: {queue_iron_ingot.qsize()}, Iron Plates:" 
-                      f"{queue_iron_plate.qsize()}")
-        time.sleep(1)
+        logging.info(f"Queue contains: {queue_iron_ingot.qsize()} iron ingots, "
+                     f"{queue_iron_plate.qsize()} iron plates")
+        time.sleep(QUEUE_INTERVAL)
+    logging.debug(f"Stopping track queue process gracefully.")
 
-def start_process(n_processes: int, target: callable, process_list: list, args: tuple) -> None:
+def start_process(target: callable, args: tuple) -> multiprocessing.Process:
+    """Create and start a multiprocessing process."""
+    process = multiprocessing.Process(target=target, args=args)
+    process.start()
+    return process
+
+def start_processes(n_processes: int, target: callable, process_list: list, args: tuple) -> None:
     """Create and start multiprocessing processes."""
     process_type = getattr(args[0], 'value', 'generic')
-    logging.info(f"Starting {n_processes} {process_type} {target.__name__} processes")
+    logging.info(f"Starting {n_processes} {process_type} {target.__name__} processes.")
 
     for i in range(n_processes):
         process = multiprocessing.Process(target=target, args=(i,) + args)
@@ -89,7 +90,13 @@ def start_process(n_processes: int, target: callable, process_list: list, args: 
 def join_processes(process_list: list) -> None:
     """Wait for all processes in the list to complete."""
     for process in process_list:
-        process.join()
+        process.join(timeout=3)
+
+def log_simulation_parameters() -> None:
+    """Log the parameters the simulation is using."""
+    logging.info(f"Simulation will be running for {SIMULATION_TIME_OUT_IN_SECONDS} seconds with, "
+                 f"{DEFAULT_NUM_PRODUCERS} producers, {DEFAULT_NUM_CONSUMERS} consumers and a "
+                 f"max queue size of {MAX_QUEUE_SIZE}.")
 
 def log_results(producer_logs: list, consumer_logs: list) -> None:
     """Log a summary of total produced and consumed items."""
@@ -98,19 +105,16 @@ def log_results(producer_logs: list, consumer_logs: list) -> None:
 def plot_results(start_time: float, producer_logs: list, consumer_logs: list, 
                  queue_logs: list) -> None:
     """Plot cumulative produced vs. consumed items over time."""
-    production_times = [p[3] for p in producer_logs] if producer_logs else []
-    consumption_times = [c[3] for c in consumer_logs] if consumer_logs else []
+    prod_times = [p[2] - start_time for p in producer_logs]
+    cons_times = [c[2] - start_time for c in consumer_logs]
 
-    if not production_times and not consumption_times:
+    if not prod_times and not cons_times:
         logging.warning("No production or consumption events to plot.")
         return
 
-    production_durations = [t - start_time for t in production_times]
-    consumption_durations = [t - start_time for t in consumption_times]
-    max_elapsed_time = int(np.ceil(max(production_durations + consumption_durations)))
-    bins = np.arange(0, max_elapsed_time + 1, 1) if max_elapsed_time > 0 else np.array([0.0, 1.0])
-    cumulative_produced = np.cumsum(np.histogram(production_durations, bins=bins)[0])
-    cumulative_consumed = np.cumsum(np.histogram(consumption_durations, bins=bins)[0])
+    bins = np.arange(0, np.ceil(max(prod_times + cons_times)) + 1)
+    cumulative_produced = np.cumsum(np.histogram(prod_times, bins=bins)[0])
+    cumulative_consumed = np.cumsum(np.histogram(cons_times, bins=bins)[0])
 
     queue_times = [q[2] - start_time for q in queue_logs] if queue_logs else []
     iron_ingot_sizes = [q[0] for q in queue_logs] if queue_logs else []
@@ -126,10 +130,10 @@ def plot_results(start_time: float, producer_logs: list, consumer_logs: list,
     ax1.grid(alpha=0.4, linestyle=':')
     ax1.legend()
 
-    width = 0.4  # bar width
-    ax2.bar([t - width/2 for t in queue_times], iron_ingot_sizes, width=width, 
+    bar_width = 0.4
+    ax2.bar([t - bar_width/2 for t in queue_times], iron_ingot_sizes, width=bar_width, 
             label='Iron Ingot Queue', color='green')
-    ax2.bar([t + width/2 for t in queue_times], iron_plate_sizes, width=width,
+    ax2.bar([t + bar_width/2 for t in queue_times], iron_plate_sizes, width=bar_width,
             label='Iron Plate Queue', color='orange')
     ax2.set_xlabel("Time (seconds)")
     ax2.set_ylabel("Queue size")
@@ -140,7 +144,6 @@ def plot_results(start_time: float, producer_logs: list, consumer_logs: list,
     plt.tight_layout()
     plt.show()
 
-# entry point
 if __name__ == '__main__':
     """Main entry point for the multiprocessing producer-consumer simulation."""
     producer_processes_list = []
@@ -150,28 +153,29 @@ if __name__ == '__main__':
     queue_iron_ingot = multiprocessing.Queue(MAX_QUEUE_SIZE)
     queue_iron_plate = multiprocessing.Queue(MAX_QUEUE_SIZE)
     queue_logs = multiprocessing.Manager().list()
-    barrier = multiprocessing.Barrier(DEFAULT_NUM_PRODUCERS)
     simulation_start_time = time.time()
 
-
+    # Flag to signal processes to stop
     stop_event = multiprocessing.Event()
-    queue_tracking_process = multiprocessing.Process(
-        target=track_queue_sizes, args=(queue_iron_ingot, queue_iron_plate, queue_logs, stop_event))
-    queue_tracking_process.start()
+    log_simulation_parameters()
 
-    start_process(DEFAULT_NUM_PRODUCERS, producer, producer_processes_list, 
-                  (ItemType.IRON_INGOT, producer_logs, barrier, queue_iron_ingot))
-    start_process(DEFAULT_NUM_CONSUMERS, consumer, consumer_processes_list, 
-                  (ItemType.IRON_INGOT, consumer_logs, queue_iron_ingot, queue_iron_plate))
-    start_process(DEFAULT_NUM_CONSUMERS, consumer, consumer_processes_list, 
-                  (ItemType.IRON_PLATE, consumer_logs, queue_iron_plate))
+    track_queue_process = start_process(track_queue_sizes, 
+                                        (queue_iron_ingot, queue_iron_plate, queue_logs, stop_event))
+    start_processes(DEFAULT_NUM_PRODUCERS, producer, producer_processes_list, 
+                    (ItemType.IRON_INGOT, stop_event, producer_logs, queue_iron_ingot))
+    start_processes(DEFAULT_NUM_CONSUMERS, consumer, consumer_processes_list, 
+                    (ItemType.IRON_INGOT, stop_event, consumer_logs, queue_iron_ingot, queue_iron_plate))
+    start_processes(DEFAULT_NUM_CONSUMERS, consumer, consumer_processes_list, 
+                    (ItemType.IRON_PLATE, stop_event, consumer_logs, queue_iron_plate))
 
-    # wait for the processes to finish
+    # Run the simulation for a fixed amount of time
+    time.sleep(SIMULATION_TIME_OUT_IN_SECONDS)
+
+    # Signal all processes to stop and wait for completion
+    stop_event.set()
     join_processes(producer_processes_list)
     join_processes(consumer_processes_list)
-
-    stop_event.set()
-    queue_tracking_process.join()
+    track_queue_process.join()
 
     log_results(producer_logs, consumer_logs)
     plot_results(simulation_start_time, producer_logs, consumer_logs, queue_logs)
