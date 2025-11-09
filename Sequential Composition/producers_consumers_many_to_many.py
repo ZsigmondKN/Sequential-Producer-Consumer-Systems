@@ -8,6 +8,7 @@ import logging
 
 DEFAULT_NUM_PRODUCERS = 5
 DEFAULT_NUM_CONSUMERS = 2
+MAX_QUEUE_SIZE = 20
 ITEMS_PER_PRODUCER = 10
 SENTINEL = None
 LOG_FORMAT = "%(asctime)s - %(levelname)s: %(message)s"
@@ -36,7 +37,8 @@ def producer(process_id: int, item_type: ItemType, producer_logs: list,
         queue.put(item)
 
         producer_logs.append((process_id, item_index, production_time, time.time()))
-        logging.info(f"Producer {process_id} produced an item: {item}")
+        logging.info(f"Produced: {item_type.value}, over {production_time} seconds")
+        logging.debug(f"Producer with ID of: {process_id}, produced item: {item}")
 
     barrier.wait()
     if process_id == 0:
@@ -53,7 +55,7 @@ def consumer(process_id: int, item_type: ItemType, consumer_logs: list,
     """
     while True:
         item = primary_queue.get()
-        service_time = random.random()
+        service_time = round(random.random(), 2)
         time.sleep(service_time)
         if item is SENTINEL:
             if secondary_queue:
@@ -63,7 +65,16 @@ def consumer(process_id: int, item_type: ItemType, consumer_logs: list,
             secondary_queue.put((ItemType.IRON_PLATE.value, item[1], item[2])) #improve later
 
         consumer_logs.append((process_id, item[0], service_time, time.time()))
-        logging.info(f"Consumer {process_id} processed an item: {item}")
+        logging.info(f"Consumed: {item[0]}, over {service_time} seconds")
+        logging.debug(f"Consumer with ID of: {process_id}, processed item: {item}")
+
+def track_queue_sizes(queue_iron_ingot: multiprocessing.Queue, queue_iron_plate: multiprocessing.Queue,
+                  queue_logs: list, stop_event: multiprocessing.Event) -> None: # type: ignore
+    while not stop_event.is_set():
+        queue_logs.append((queue_iron_ingot.qsize(), queue_iron_plate.qsize(), time.time()))
+        logging.info(f"Queue sizes - Iron Ingots: {queue_iron_ingot.qsize()}, Iron Plates:" 
+                      f"{queue_iron_plate.qsize()}")
+        time.sleep(1)
 
 def start_process(n_processes: int, target: callable, process_list: list, args: tuple) -> None:
     """Create and start multiprocessing processes."""
@@ -84,7 +95,8 @@ def log_results(producer_logs: list, consumer_logs: list) -> None:
     """Log a summary of total produced and consumed items."""
     logging.info(f"Logged {len(producer_logs)} produced and {len(consumer_logs)} consumed items.")
 
-def plot_results(start_time: float, producer_logs: list, consumer_logs: list) -> None:
+def plot_results(start_time: float, producer_logs: list, consumer_logs: list, 
+                 queue_logs: list) -> None:
     """Plot cumulative produced vs. consumed items over time."""
     production_times = [p[3] for p in producer_logs] if producer_logs else []
     consumption_times = [c[3] for c in consumer_logs] if consumer_logs else []
@@ -100,14 +112,31 @@ def plot_results(start_time: float, producer_logs: list, consumer_logs: list) ->
     cumulative_produced = np.cumsum(np.histogram(production_durations, bins=bins)[0])
     cumulative_consumed = np.cumsum(np.histogram(consumption_durations, bins=bins)[0])
 
-    plt.figure(figsize=(8, 4))
-    plt.plot(bins[:-1], cumulative_produced, label='Cumulative Produced', color='blue', marker='o')
-    plt.plot(bins[:-1], cumulative_consumed, label='Cumulative Consumed', color='red', marker='o')
-    plt.xlabel("Time (seconds)")
-    plt.ylabel("Total items")
-    plt.title("Cumulative Production vs Consumption")
-    plt.grid(alpha=0.4, linestyle=':')
-    plt.legend()
+    queue_times = [q[2] - start_time for q in queue_logs] if queue_logs else []
+    iron_ingot_sizes = [q[0] for q in queue_logs] if queue_logs else []
+    iron_plate_sizes = [q[1] for q in queue_logs] if queue_logs else []
+
+    fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)
+
+    ax1.plot(bins[:-1], cumulative_produced, label='Cumulative Produced', color='blue', marker='o')
+    ax1.plot(bins[:-1], cumulative_consumed, label='Cumulative Consumed', color='red', marker='o')
+    ax1.set_xlabel("Time (seconds)")
+    ax1.set_ylabel("Total items")
+    ax1.set_title("Cumulative Production and Consumption")
+    ax1.grid(alpha=0.4, linestyle=':')
+    ax1.legend()
+
+    width = 0.4  # bar width
+    ax2.bar([t - width/2 for t in queue_times], iron_ingot_sizes, width=width, 
+            label='Iron Ingot Queue', color='green')
+    ax2.bar([t + width/2 for t in queue_times], iron_plate_sizes, width=width,
+            label='Iron Plate Queue', color='orange')
+    ax2.set_xlabel("Time (seconds)")
+    ax2.set_ylabel("Queue size")
+    ax2.set_title("Queue Sizes Over Time (1-second buckets)")
+    ax2.grid(alpha=0.4, linestyle=':')
+    ax2.legend()
+
     plt.tight_layout()
     plt.show()
 
@@ -118,10 +147,17 @@ if __name__ == '__main__':
     consumer_processes_list = []
     producer_logs = multiprocessing.Manager().list()
     consumer_logs = multiprocessing.Manager().list()
-    queue_iron_ingot = multiprocessing.Queue()
-    queue_iron_plate = multiprocessing.Queue()
+    queue_iron_ingot = multiprocessing.Queue(MAX_QUEUE_SIZE)
+    queue_iron_plate = multiprocessing.Queue(MAX_QUEUE_SIZE)
+    queue_logs = multiprocessing.Manager().list()
     barrier = multiprocessing.Barrier(DEFAULT_NUM_PRODUCERS)
     simulation_start_time = time.time()
+
+
+    stop_event = multiprocessing.Event()
+    queue_tracking_process = multiprocessing.Process(
+        target=track_queue_sizes, args=(queue_iron_ingot, queue_iron_plate, queue_logs, stop_event))
+    queue_tracking_process.start()
 
     start_process(DEFAULT_NUM_PRODUCERS, producer, producer_processes_list, 
                   (ItemType.IRON_INGOT, producer_logs, barrier, queue_iron_ingot))
@@ -134,5 +170,8 @@ if __name__ == '__main__':
     join_processes(producer_processes_list)
     join_processes(consumer_processes_list)
 
+    stop_event.set()
+    queue_tracking_process.join()
+
     log_results(producer_logs, consumer_logs)
-    plot_results(simulation_start_time, producer_logs, consumer_logs)
+    plot_results(simulation_start_time, producer_logs, consumer_logs, queue_logs)
