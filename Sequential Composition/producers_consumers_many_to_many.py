@@ -9,6 +9,10 @@ from queue import Empty, Full
 from collections import Counter
 from dataclasses import dataclass
 
+# --------------------------------------------------------------------------------------------------
+# Running instructions 
+#   RUN - python producers_consumers_many_to_many.py
+# --------------------------------------------------------------------------------------------------
 
 # ==================================================================================================
 # Simulation data structures
@@ -40,7 +44,7 @@ class QueueLogs:
     timestamp: float
 
 @dataclass(frozen=True)
-class Stage:
+class ProcessLink:
     input: str | None
     output: str | None
     time: float
@@ -66,33 +70,33 @@ class SimConfig:
     iron_ingot_queue_size: int = 20
     iron_plate_queue_size: int = 40
 
-CFG = SimConfig()
+SIM_PARAMS = SimConfig()
 
 SEQUENCE_MODEL = {
     ItemType.IRON_INGOT: {
-        "producer": Stage(
+        "producer": ProcessLink(
             input=None,
             output="queue_iron_ingot",
-            time=CFG.iron_ingot_production_time,
+            time=SIM_PARAMS.iron_ingot_production_time,
         ),
-        "consumer": Stage(
+        "consumer": ProcessLink(
             input="queue_iron_ingot",
             output="queue_iron_plate",
-            time=CFG.iron_ingot_consumption_time,
+            time=SIM_PARAMS.iron_ingot_consumption_time,
             output_type=ItemType.IRON_PLATE,
         ),
     },
 
     ItemType.IRON_PLATE: {
-        "producer": Stage(
+        "producer": ProcessLink(
             input=None,
             output="queue_iron_plate",
             time=None,
         ),
-        "consumer": Stage(
+        "consumer": ProcessLink(
             input="queue_iron_plate",
             output=None,
-            time=CFG.iron_plate_consumption_time,
+            time=SIM_PARAMS.iron_plate_consumption_time,
             output_type=None,
         )
     }
@@ -101,7 +105,7 @@ SEQUENCE_MODEL = {
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(message)s", datefmt="%H:%M:%S")
 
 # ==================================================================================================
-# Process target functions
+# Main processes
 # ==================================================================================================
 
 def producer(process_id: int, item_type: ItemType, shared_r: SharedResources) -> None:
@@ -149,10 +153,10 @@ def track_queue_sizes(process_id: int, shared_r: SharedResources) -> None:
                                                      time.time()))
         logging.info(f"Queue contains: {shared_r.queue_iron_ingot.qsize()} iron ingots, "
                     f"{shared_r.queue_iron_plate.qsize()} iron plates")
-        time.sleep(CFG.queue_interval)
+        time.sleep(SIM_PARAMS.queue_interval)
 
 # ==================================================================================================
-# Process target helper functions
+# Helper processes
 # ==================================================================================================
 
 def logistic_slowdown(qsize, max_qsize, base_time):
@@ -219,11 +223,11 @@ def join_processes(process_list: list) -> None:
 
 def log_simulation_parameters() -> None:
     """Log the parameters the simulation is using."""
-    logging.info(f"The simulation will be running for {CFG.simulation_timeout_in_seconds} seconds. ")
-    logging.info(f"The iron ingot material will have {CFG.iron_ingot_producers} producers, "
-                 f"{CFG.iron_ingot_consumers} consumers and a max queue size of {CFG.iron_ingot_queue_size}.")
-    logging.info(f"The iron plate material will have {CFG.iron_plate_consumers} consumers "
-                 f"and a max queue size of {CFG.iron_plate_queue_size}.")
+    logging.info(f"The simulation will be running for {SIM_PARAMS.simulation_timeout_in_seconds} seconds. ")
+    logging.info(f"The iron ingot material will have {SIM_PARAMS.iron_ingot_producers} producers, "
+                 f"{SIM_PARAMS.iron_ingot_consumers} consumers and a max queue size of {SIM_PARAMS.iron_ingot_queue_size}.")
+    logging.info(f"The iron plate material will have {SIM_PARAMS.iron_plate_consumers} consumers "
+                 f"and a max queue size of {SIM_PARAMS.iron_plate_queue_size}.")
 def log_results(shared_r: SharedResources) -> None:
     """Log a summary of total produced and consumed items."""
     produced_items_count_dict = Counter(log.item_type for log in shared_r.producer_logs)
@@ -241,16 +245,9 @@ def log_results(shared_r: SharedResources) -> None:
 # Diagram generation
 # ==================================================================================================
 
-def plot_producer_consumer_rates(
-    ax: plt.Axes,
-    start_time: float,
-    producer_logs: list[SimulationLogs],
-    consumer_logs: list[SimulationLogs],
-    bucket_size: float = 1.0,
-    smooth_window: int = 3,  # seconds of rolling smoothing
-) -> None:
-
-    # --- Extract timestamps per type ---
+def plot_producer_consumer_rates(ax: plt.Axes, start_time: float, producer_logs: list[SimulationLogs],
+                                 consumer_logs: list[SimulationLogs], bucket_size: float = 1.0, 
+                                 smooth_window: int = 3) -> None:
     def extract_times(logs, item):
         return [log.timestamp - start_time for log in logs if log.item_type == item]
 
@@ -259,22 +256,14 @@ def plot_producer_consumer_rates(
     cons_ingot = extract_times(consumer_logs, ItemType.IRON_INGOT.value)
     cons_plate = extract_times(consumer_logs, ItemType.IRON_PLATE.value)
 
-    # --- Determine histogram bin edges ---
-    max_t = max(
-        prod_ingot + prod_plate + cons_ingot + cons_plate + [0]
-    )
+    max_t = max(prod_ingot + prod_plate + cons_ingot + cons_plate + [0])
     bins = np.arange(0, max_t + bucket_size, bucket_size)
 
-    # --- Compute binned rates ---
-    def rate(times):
-        return np.histogram(times, bins=bins)[0]
+    prod_ingot_rate = np.histogram(prod_ingot, bins=bins)[0]
+    prod_plate_rate = np.histogram(prod_plate, bins=bins)[0]
+    cons_ingot_rate = np.histogram(cons_ingot, bins=bins)[0]
+    cons_plate_rate = np.histogram(cons_plate, bins=bins)[0]
 
-    prod_ingot_rate = rate(prod_ingot)
-    prod_plate_rate = rate(prod_plate)
-    cons_ingot_rate = rate(cons_ingot)
-    cons_plate_rate = rate(cons_plate)
-
-    # --- Apply smoothing (rolling mean) ---
     def smooth(arr):
         if smooth_window <= 1:
             return arr
@@ -286,23 +275,11 @@ def plot_producer_consumer_rates(
     cons_ingot_rate_s = smooth(cons_ingot_rate)
     cons_plate_rate_s = smooth(cons_plate_rate)
 
-    # Use the *bucket centers* for nicer alignment
     t = bins[:-1] + bucket_size / 2
-
-    # --- Line plots with markers for visibility ---
-    ax.plot(t, prod_ingot_rate_s, "-o", label="Prod: Iron Ingot",
-            color="blue", markersize=4, alpha=0.9)
-    ax.plot(t, prod_plate_rate_s, "-o", label="Prod: Iron Plate",
-            color="cyan", markersize=4, alpha=0.9)
-    ax.plot(t, cons_ingot_rate_s, "-o", label="Cons: Iron Ingot",
-            color="red", markersize=4, alpha=0.9)
-    ax.plot(t, cons_plate_rate_s, "-o", label="Cons: Iron Plate",
-            color="orange", markersize=4, alpha=0.9)
-
-    # Slight transparency helps overlapping points remain visible
-    for line in ax.lines:
-        line.set_alpha(0.85)
-        line.set_linewidth(1.6)
+    ax.plot(t, prod_ingot_rate_s, "-o", label="Prod: Iron Ingot", color="blue", markersize=4, alpha=0.9)
+    ax.plot(t, prod_plate_rate_s, "-o", label="Prod: Iron Plate", color="cyan", markersize=4, alpha=0.9)
+    ax.plot(t, cons_ingot_rate_s, "-o", label="Cons: Iron Ingot", color="red", markersize=4, alpha=0.9)
+    ax.plot(t, cons_plate_rate_s, "-o", label="Cons: Iron Plate", color="orange", markersize=4, alpha=0.9)
 
     ax.set(
         xlabel="Time (seconds)",
@@ -352,8 +329,8 @@ def create_shared_resources() -> SharedResources:
         producer_logs = multiprocessing.Manager().list(),
         consumer_logs = multiprocessing.Manager().list(),
         queue_logs = multiprocessing.Manager().list(),
-        queue_iron_ingot = multiprocessing.Queue(CFG.iron_ingot_queue_size),
-        queue_iron_plate = multiprocessing.Queue(CFG.iron_plate_queue_size),
+        queue_iron_ingot = multiprocessing.Queue(SIM_PARAMS.iron_ingot_queue_size),
+        queue_iron_plate = multiprocessing.Queue(SIM_PARAMS.iron_plate_queue_size)
     )
 
 # ==================================================================================================
@@ -369,12 +346,12 @@ def main() -> None:
     # Start all producer, consumer, and tracking processes
     log_simulation_parameters()
     processes_list.extend(start_processes(1, track_queue_sizes, (shared_resources,)))
-    processes_list.extend(start_processes(CFG.iron_ingot_producers, producer, (ItemType.IRON_INGOT, shared_resources)))
-    processes_list.extend(start_processes(CFG.iron_ingot_consumers, consumer, (ItemType.IRON_INGOT, shared_resources)))
-    processes_list.extend(start_processes(CFG.iron_plate_consumers, consumer, (ItemType.IRON_PLATE, shared_resources)))
+    processes_list.extend(start_processes(SIM_PARAMS.iron_ingot_producers, producer, (ItemType.IRON_INGOT, shared_resources)))
+    processes_list.extend(start_processes(SIM_PARAMS.iron_ingot_consumers, consumer, (ItemType.IRON_INGOT, shared_resources)))
+    processes_list.extend(start_processes(SIM_PARAMS.iron_plate_consumers, consumer, (ItemType.IRON_PLATE, shared_resources)))
 
     # Run the simulation for a fixed amount of time
-    time.sleep(CFG.simulation_timeout_in_seconds)
+    time.sleep(SIM_PARAMS.simulation_timeout_in_seconds)
 
     # Signal all processes to stop and wait for completion
     shared_resources.stop_event.set()
