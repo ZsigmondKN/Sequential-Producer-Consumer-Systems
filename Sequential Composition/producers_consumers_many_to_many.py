@@ -391,8 +391,8 @@ def objective(trial: optuna.Trial) -> float:
 
     sim_runtime = run_simulation(sim_config)
 
-    # ---- Oscillation metric: normalized variance ----
-    total_variance = 0.0
+    # ---- Oscillation metric: FFT peak energy ----
+    total_score = 0.0
 
     for item_type in ItemType:
         usages = [
@@ -401,12 +401,29 @@ def objective(trial: optuna.Trial) -> float:
             if log.queue_name == item_type.value
         ]
 
-        if len(usages) > 1:
-            capacity = sim_config.nodes[item_type].queue_size
-            normalized = np.array(usages) / capacity
-            total_variance += np.var(normalized)
+        if len(usages) > 10:
 
-    return total_variance
+            # Drop first 30% (remove transient ramp)
+            cutoff = int(len(usages) * 0.3)
+            usages = usages[cutoff:]
+
+            capacity = sim_config.nodes[item_type].queue_size
+            signal = np.array(usages) / capacity
+
+            # Remove mean (remove DC component)
+            signal = signal - np.mean(signal)
+
+            # Compute FFT
+            fft_vals = np.fft.rfft(signal)
+            power = np.abs(fft_vals)
+
+            # Ignore zero-frequency (DC)
+            if len(power) > 1:
+                peak_energy = np.max(power[1:]) / len(signal)
+                total_score += peak_energy
+
+    return total_score
+
 
 
 # ==================================================================================================
