@@ -1,10 +1,7 @@
-import multiprocessing
-import time
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from enum import Enum
-from queue import Empty, Full
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -24,11 +21,10 @@ class ItemType(Enum):
 
 @dataclass
 class SimRunTime:
-    stop_event: multiprocessing.Event # type: ignore
     producer_logs: list
     consumer_logs: list
-    queue_logs: list[str, int, float]
-    queues: dict[ItemType, multiprocessing.Queue]
+    queue_logs: list
+    queues: dict[ItemType, int]
 
 @dataclass
 class SimulationLogs:
@@ -114,87 +110,61 @@ class SimConfig:
 # Main processes
 # ==================================================================================================
 
-def producer(process_id: int, item_type: ItemType, sim_runtime: SimRunTime, sim_config: SimConfig) -> None:
+def producer(process_id: int, item_type: ItemType, sim_runtime: SimRunTime, 
+             sim_config: SimConfig, sim_time: float, worker_state: dict) -> None:
     """Run a producer process that generates the specified item type and places them into a queue."""
     node = sim_config.nodes[item_type]
-    output_queue = sim_runtime.queues[node.producer.output]
-    base_production_time = node.producer.production_time
+    output_type = node.producer.output
+    production_time = node.producer.production_time
 
-    while not sim_runtime.stop_event.is_set():
-        time.sleep(base_production_time)
-        item = (item_type.value, base_production_time)
+    while sim_time >= worker_state["next_ready"]:
+        queue_size = sim_runtime.queues[output_type]
+        max_size = sim_config.nodes[output_type].queue_size
 
-        queue_update(output_queue, "put", sim_runtime.stop_event, item=item)
-        sim_runtime.producer_logs.append(SimulationLogs(process_id, item_type.value, time.time()))
+        if queue_size < max_size:
+            sim_runtime.queues[output_type] += 1
+            sim_runtime.producer_logs.append(
+                SimulationLogs(process_id, item_type.value, sim_time)
+            )
+            worker_state["next_ready"] += production_time
+        else:
+            break
 
-def consumer(process_id: int, item_type: ItemType, sim_runtime: SimRunTime, sim_config: SimConfig) -> None:
+def consumer(process_id: int, item_type: ItemType, sim_runtime: SimRunTime,
+             sim_config: SimConfig, sim_time: float, worker_state: dict) -> None:
     """Run a consumer process that retrieves and processes items from the provided queue."""
     node = sim_config.nodes[item_type]
+    input_type = node.consumer.input
     output_type = node.consumer.output
-    input_queue = sim_runtime.queues[node.consumer.input] if node.consumer.input else None
-    output_queue = sim_runtime.queues[output_type] if output_type else None
     consumption_time = node.consumer.consumption_time
 
-    while not sim_runtime.stop_event.is_set():
-        item = queue_update(input_queue, "get", sim_runtime.stop_event)
-        if item is None:
+    while sim_time >= worker_state["next_ready"]:
+
+        # If no input available → stall
+        if sim_runtime.queues[input_type] == 0:
             break
-        time.sleep(consumption_time)
-        sim_runtime.consumer_logs.append(SimulationLogs(process_id, item_type.value, time.time()))
-        if output_queue:
-            new_item = (output_type.value, item[1])
-            queue_update(output_queue, "put", sim_runtime.stop_event, item=new_item)
-            sim_runtime.producer_logs.append(SimulationLogs(process_id, output_type.value, time.time()))
 
-def track_queue_sizes(process_id: int, sim_runtime: SimRunTime, sim_config: SimConfig) -> None:
-    """Track and log the sizes of the queues at regular intervals."""
-    while not sim_runtime.stop_event.is_set():
-        snapshot = []
-        for item_type, queue in sim_runtime.queues.items():
-            sim_runtime.queue_logs.append(QueueLogs(item_type.value, queue.qsize(), time.time()))
-            snapshot.append(f"{item_type.value}: {queue.qsize()}")
-        logging.info("Queues contain - " + " | ".join(snapshot))
-        time.sleep(sim_config.queue_interval)
-
-# ==================================================================================================
-# Helper processes
-# ==================================================================================================
-
-def queue_update(queue: multiprocessing.Queue, action: str, stop_event, timeout: float=0.1, 
-                 max_timeout: float=2.0, item: tuple=None) -> None:
-    """Performs the defined action on the provided queue with exponential timeouts for better efficiency."""
-    while not stop_event.is_set():
-        try:
-            if action == "put":
-                queue.put(item, timeout=timeout)
+        # If there is an output queue and it's full → stall
+        if output_type:
+            next_node = sim_config.nodes[output_type]
+            if sim_runtime.queues[output_type] >= next_node.queue_size:
                 break
-            elif action == "get":
-                return queue.get(timeout=timeout)
-        except (Full, Empty):
-            timeout = min(timeout * 2, max_timeout)
-    # if stopping, return None for get actions
-    return None
 
-# ==================================================================================================
-# Process management functions
-# ==================================================================================================
+        # Perform consumption
+        sim_runtime.queues[input_type] -= 1
 
-def start_processes(n_processes: int, target: callable, args: tuple) -> list:
-    """Create and start multiprocessing processes."""
-    process_type = getattr(args[0], 'value', 'generic')
-    logging.info(f"Starting {n_processes} {process_type} {target.__name__} processes.")
+        sim_runtime.consumer_logs.append(
+            SimulationLogs(process_id, item_type.value, sim_time)
+        )
 
-    process_list = []
-    for i in range(n_processes):
-        process = multiprocessing.Process(target=target, args=(i,) + args)
-        process.start()
-        process_list.append(process)
-    return process_list
+        # Produce output if applicable
+        if output_type:
+            sim_runtime.queues[output_type] += 1
+            sim_runtime.producer_logs.append(
+                SimulationLogs(process_id, output_type.value, sim_time)
+            )
 
-def join_processes(process_list: list) -> None:
-    """Wait for all processes in the list to complete."""
-    for process in process_list:
-        process.join(timeout=3)
+        worker_state["next_ready"] += consumption_time
 
 # ==================================================================================================
 # Logging in terminal
@@ -291,12 +261,12 @@ def plot_results(start_time: float, sim_runtime: SimRunTime) -> None:
 def create_sim_runtime(sim_config: SimConfig) -> SimRunTime:
     """Create and return a SimRunTime dataclass with initialized shared resources."""
     return SimRunTime(
-        stop_event = multiprocessing.Event(),
-        producer_logs = multiprocessing.Manager().list(),
-        consumer_logs = multiprocessing.Manager().list(),
-        queue_logs = multiprocessing.Manager().list(),
-        queues = {
-            item_type: multiprocessing.Queue(item_params.queue_size) for item_type, item_params in sim_config.nodes.items()
+        producer_logs=[],
+        consumer_logs=[],
+        queue_logs=[],
+        queues={
+            item_type: 0
+            for item_type in sim_config.nodes.keys()
         }
     )
 
@@ -307,30 +277,59 @@ def create_sim_runtime(sim_config: SimConfig) -> SimRunTime:
 def main() -> None:
     """Main function for running the simulation."""
     sim_config = SimConfig()
-    processes_list = []
-    simulation_start_time = time.time()
     sim_runtime = create_sim_runtime(sim_config)
 
     log_simulation_parameters(sim_runtime, sim_config)
 
-    # Start tracking
-    processes_list.extend(start_processes(1, track_queue_sizes, (sim_runtime, sim_config)))
-    # Start producers and consumers
+    # Create worker state
+    workers = []
     for item_type, node in sim_config.nodes.items():
-        if node.producer.count > 0:
-            processes_list.extend(start_processes(node.producer.count, producer, (item_type, sim_runtime, sim_config)))
-        if node.consumer.count > 0:
-            processes_list.extend(start_processes(node.consumer.count, consumer, (item_type, sim_runtime, sim_config)))
+        for i in range(node.producer.count):
+            workers.append({
+                "type": "producer",
+                "id": i,
+                "item_type": item_type,
+                "next_ready": 0.0
+            })
 
-    # Run the simulation for a fixed amount of time
-    time.sleep(sim_config.simulation_timeout_in_seconds)
+        for i in range(node.consumer.count):
+            workers.append({
+                "type": "consumer",
+                "id": i,
+                "item_type": item_type,
+                "next_ready": 0.0
+            })
 
-    # Signal all processes to stop and wait for completion
-    sim_runtime.stop_event.set()
-    join_processes(processes_list)
+    # Simulation loop
+    sim_time = 0.0
+    dt = 0.01
+    simulation_duration = sim_config.simulation_timeout_in_seconds
+    last_queue_log_time = -sim_config.queue_interval
+
+    while sim_time < simulation_duration:
+
+        for worker in workers:
+            if worker["type"] == "producer":
+                producer(worker["id"], worker["item_type"],
+                         sim_runtime, sim_config,
+                         sim_time, worker)
+            else:
+                consumer(worker["id"], worker["item_type"],
+                         sim_runtime, sim_config,
+                         sim_time, worker)
+
+        # Log queue sizes at interval
+        if sim_time - last_queue_log_time >= sim_config.queue_interval:
+            for item_type, size in sim_runtime.queues.items():
+                sim_runtime.queue_logs.append(
+                    QueueLogs(item_type.value, size, sim_time)
+                )
+            last_queue_log_time = sim_time
+
+        sim_time += dt
 
     log_results(sim_runtime)
-    plot_results(simulation_start_time, sim_runtime)
+    plot_results(0.0, sim_runtime)
 
 if __name__ == '__main__':
     main()
