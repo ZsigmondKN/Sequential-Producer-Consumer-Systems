@@ -1,5 +1,4 @@
 import multiprocessing
-import random
 import time
 import logging
 import numpy as np
@@ -120,13 +119,10 @@ def producer(process_id: int, item_type: ItemType, sim_runtime: SimRunTime, sim_
     node = sim_config.nodes[item_type]
     output_queue = sim_runtime.queues[node.producer.output]
     base_production_time = node.producer.production_time
-    max_queue_size = output_queue._maxsize
 
     while not sim_runtime.stop_event.is_set():
-        adaptive_production_time = logistic_slowdown(output_queue.qsize(), max_queue_size, base_production_time)
         time.sleep(base_production_time)
-        # time.sleep(adaptive_production_time)
-        item = (item_type.value, adaptive_production_time)
+        item = (item_type.value, base_production_time)
 
         queue_update(output_queue, "put", sim_runtime.stop_event, item=item)
         sim_runtime.producer_logs.append(SimulationLogs(process_id, item_type.value, time.time()))
@@ -163,28 +159,6 @@ def track_queue_sizes(process_id: int, sim_runtime: SimRunTime, sim_config: SimC
 # ==================================================================================================
 # Helper processes
 # ==================================================================================================
-
-def logistic_slowdown(qsize, max_qsize, base_time):
-    """
-    Smoothly increase production time as the queue fills.
-    Tunable S-curve controlled by midpoint, steepness and slowdown range.
-    """
-
-    fill = qsize / max_qsize
-
-    # --- Tunable parameters ---
-    midpoint = 0.5      # where slowdown begins (0–1)
-    steepness = 20      # how fast the curve rises
-    min_multiplier = 1  # base_time × this when queue empty
-    max_multiplier = 2  # base_time × this when queue full
-
-    # --- Logistic S-curve ---
-    logistic_value = 1 / (1 + np.exp(-steepness * (fill - midpoint)))
-
-    # Map logistic output (0→1) to slowdown range (min_multiplier→max_multiplier)
-    multiplier = min_multiplier + logistic_value * (max_multiplier - min_multiplier)
-
-    return base_time * multiplier
 
 def queue_update(queue: multiprocessing.Queue, action: str, stop_event, timeout: float=0.1, 
                  max_timeout: float=2.0, item: tuple=None) -> None:
@@ -234,7 +208,7 @@ def log_simulation_parameters(sim_runtime: SimRunTime, sim_config: SimConfig) ->
         if node_config.producer.count > 0:
             config_info += f" | producer/s count: {node_config.producer.count} | production time(s): {node_config.producer.production_time}"
         if node_config.consumer.count > 0:
-            config_info += f" | consumer/s count: {node_config.producer.count} | consumption time(s): {node_config.producer.production_time}"
+            config_info += f" | consumer/s count: {node_config.consumer.count} | consumption time(s): {node_config.consumer.consumption_time}"
         logging.info(config_info)
 
 def log_results(sim_runtime: SimRunTime) -> None:
