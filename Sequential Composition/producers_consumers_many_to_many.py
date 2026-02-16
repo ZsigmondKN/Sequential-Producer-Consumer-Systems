@@ -1,4 +1,5 @@
 import logging
+import optuna
 import numpy as np
 import matplotlib.pyplot as plt
 from enum import Enum
@@ -271,15 +272,12 @@ def create_sim_runtime(sim_config: SimConfig) -> SimRunTime:
     )
 
 # ==================================================================================================
-# Main function
+# Simulation Logic
 # ==================================================================================================
 
-def main() -> None:
-    """Main function for running the simulation."""
-    sim_config = SimConfig()
-    sim_runtime = create_sim_runtime(sim_config)
+def run_simulation(sim_config: SimConfig) -> SimRunTime:
 
-    log_simulation_parameters(sim_runtime, sim_config)
+    sim_runtime = create_sim_runtime(sim_config)
 
     # Create worker state
     workers = []
@@ -318,7 +316,7 @@ def main() -> None:
                          sim_runtime, sim_config,
                          sim_time, worker)
 
-        # Log queue sizes at interval
+        # Log queue sizes
         if sim_time - last_queue_log_time >= sim_config.queue_interval:
             for item_type, size in sim_runtime.queues.items():
                 sim_runtime.queue_logs.append(
@@ -327,6 +325,144 @@ def main() -> None:
             last_queue_log_time = sim_time
 
         sim_time += dt
+
+    return sim_runtime
+
+
+# ==================================================================================================
+# Optuna Objective Setup
+# ==================================================================================================
+
+def objective(trial: optuna.Trial) -> float:
+
+    # Suggest parameters
+    ingot_prod_time = trial.suggest_float("ingot_prod_time", 0.1, 2.0)
+    ingot_cons_time = trial.suggest_float("ingot_cons_time", 0.1, 2.0)
+    plate_cons_time = trial.suggest_float("plate_cons_time", 0.1, 2.0)
+    cogs_cons_time = trial.suggest_float("cogs_cons_time", 0.1, 2.0)
+
+    ingot_producers = trial.suggest_int("ingot_producers", 1, 8)
+    ingot_consumers = trial.suggest_int("ingot_consumers", 1, 8)
+    plate_consumers = trial.suggest_int("plate_consumers", 1, 6)
+    cogs_consumers = trial.suggest_int("cogs_consumers", 1, 4)
+
+    ingot_qsize = trial.suggest_int("ingot_qsize", 5, 100)
+    plate_qsize = trial.suggest_int("plate_qsize", 5, 100)
+    cogs_qsize = trial.suggest_int("cogs_qsize", 5, 100)
+
+    # Build config
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=60,
+        queue_interval=0.5,
+        nodes={
+            ItemType.IRON_INGOT: NodeConfig(
+                queue_size=ingot_qsize,
+                producer=ProducerConfig(
+                    count=ingot_producers,
+                    output=ItemType.IRON_INGOT,
+                    production_time=ingot_prod_time,
+                ),
+                consumer=ConsumerConfig(
+                    count=ingot_consumers,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_PLATE,
+                    consumption_time=ingot_cons_time,
+                ),
+            ),
+            ItemType.IRON_PLATE: NodeConfig(
+                queue_size=plate_qsize,
+                consumer=ConsumerConfig(
+                    count=plate_consumers,
+                    input=ItemType.IRON_PLATE,
+                    output=ItemType.IRON_COGS,
+                    consumption_time=plate_cons_time,
+                ),
+            ),
+            ItemType.IRON_COGS: NodeConfig(
+                queue_size=cogs_qsize,
+                consumer=ConsumerConfig(
+                    count=cogs_consumers,
+                    input=ItemType.IRON_COGS,
+                    consumption_time=cogs_cons_time,
+                ),
+            ),
+        },
+    )
+
+    sim_runtime = run_simulation(sim_config)
+
+    # ---- Oscillation metric: normalized variance ----
+    total_variance = 0.0
+
+    for item_type in ItemType:
+        usages = [
+            log.queue_usage
+            for log in sim_runtime.queue_logs
+            if log.queue_name == item_type.value
+        ]
+
+        if len(usages) > 1:
+            capacity = sim_config.nodes[item_type].queue_size
+            normalized = np.array(usages) / capacity
+            total_variance += np.var(normalized)
+
+    return total_variance
+
+
+# ==================================================================================================
+# Main function
+# ==================================================================================================
+
+def main() -> None:
+    """Main function for running the simulation."""
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=100)
+
+    print("Best value:", study.best_value)
+    print("Best params:", study.best_params)
+
+    # Rebuild config from best params
+    p = study.best_params
+
+    best_config = SimConfig(
+        simulation_timeout_in_seconds=30,
+        queue_interval=0.5,
+        nodes={
+            ItemType.IRON_INGOT: NodeConfig(
+                queue_size=p["ingot_qsize"],
+                producer=ProducerConfig(
+                    count=p["ingot_producers"],
+                    output=ItemType.IRON_INGOT,
+                    production_time=p["ingot_prod_time"],
+                ),
+                consumer=ConsumerConfig(
+                    count=p["ingot_consumers"],
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_PLATE,
+                    consumption_time=p["ingot_cons_time"],
+                ),
+            ),
+            ItemType.IRON_PLATE: NodeConfig(
+                queue_size=p["plate_qsize"],
+                consumer=ConsumerConfig(
+                    count=p["plate_consumers"],
+                    input=ItemType.IRON_PLATE,
+                    output=ItemType.IRON_COGS,
+                    consumption_time=p["plate_cons_time"],
+                ),
+            ),
+            ItemType.IRON_COGS: NodeConfig(
+                queue_size=p["cogs_qsize"],
+                consumer=ConsumerConfig(
+                    count=p["cogs_consumers"],
+                    input=ItemType.IRON_COGS,
+                    consumption_time=p["cogs_cons_time"],
+                ),
+            ),
+        },
+    )
+
+    sim_runtime = run_simulation(best_config)
 
     log_results(sim_runtime)
     plot_results(0.0, sim_runtime)
