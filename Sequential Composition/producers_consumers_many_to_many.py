@@ -196,7 +196,9 @@ def log_results(simulation_state: SimulationState) -> None:
 
 def plot_producer_consumer_rates(ax: plt.Axes, start_time: float, producer_logs: list[SimulationLogs],
                                  consumer_logs: list[SimulationLogs], bucket_size: float = 1.0) -> None:
-    items = sorted({log.item_type for log in list(producer_logs) + list(consumer_logs)})
+    item_types = {log.item_type for log in producer_logs + consumer_logs}
+    ordered_items = [item.value for item in ItemType if item.value in item_types]
+    # items = sorted({log.item_type for log in list(producer_logs) + list(consumer_logs)})
     all_times = [log.timestamp - start_time for log in list(producer_logs) + list(consumer_logs)]
     max_t = max(all_times + [0])
     bins = np.arange(0, max_t + bucket_size, bucket_size)
@@ -205,18 +207,26 @@ def plot_producer_consumer_rates(ax: plt.Axes, start_time: float, producer_logs:
     def extract_times(logs: list[SimulationLogs], item: str) -> list[float]:
         return [log.timestamp - start_time for log in logs if log.item_type == item]
 
-    for item in items:
+    for item in ordered_items:
         prod_times = extract_times(producer_logs, item)
-        prod_counts, _ = np.histogram(prod_times, bins=bins)
-        ax.plot(bin_centres, prod_counts, "-o", markersize=4, alpha=0.9, label=f"Prod: {item}")
         cons_times = extract_times(consumer_logs, item)
+        prod_counts, _ = np.histogram(prod_times, bins=bins)
         cons_counts, _ = np.histogram(cons_times, bins=bins)
-        ax.plot(bin_centres, cons_counts, "--o", markersize=4, alpha=0.9, label=f"Cons: {item}")
+        # ax.plot(bin_centres, prod_counts, "-o", markersize=4, alpha=0.9, label=f"Prod: {item}")
+        # ax.plot(bin_centres, cons_counts, "--o", markersize=4, alpha=0.9, label=f"Cons: {item}")
+
+        if len(prod_times) > 0:
+            throughput = prod_counts
+        else:
+            throughput = cons_counts
+        
+        ax.plot(bin_centres, throughput, "--o", markersize=4, alpha=0.9, label=f"Throughput: {item}")
     
     ax.set(
         xlabel="Time (seconds)",
         ylabel="Items per second",
-        title=f"Production & Consumption Rates (bucket={bucket_size}s)",
+        # title=f"Production & Consumption Rates (bucket={bucket_size}s)",
+        title=f"Production & Consumption Throughput (bucket={bucket_size}s)",
     )
     ax.grid(alpha=0.4, linestyle=":")
     ax.legend()
@@ -469,15 +479,54 @@ def compute_score(simulation_state: SimulationState, sim_config: SimConfig, para
 
 def main() -> None:
     """Main function for running the simulation."""
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=100)
+    # study = optuna.create_study(direction="maximize")
+    # study.optimize(objective, n_trials=100)
 
-    print("Best value:", study.best_value)
-    print("Best params:", study.best_params)
+    # print("Best value:", study.best_value)
+    # print("Best params:", study.best_params)
 
     # Rebuild best results from Optuna runs
-    best_parameters = study.best_params
-    best_sim_config = populate_sim_config(best_parameters)
+    # best_parameters = study.best_params
+    # best_sim_config = populate_sim_config(best_parameters)
+    best_sim_config = SimConfig(
+        simulation_timeout_in_seconds=60,
+        queue_interval=1.0,
+        nodes={
+            ItemType.IRON_INGOT: NodeConfig(
+                queue_size=20,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=0.5,
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_PLATE,
+                    consumption_time=1,
+                ),
+            ),
+
+            ItemType.IRON_PLATE: NodeConfig(
+                queue_size=20,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_PLATE,
+                    output=ItemType.IRON_COGS,
+                    consumption_time=0.5,
+                ),
+            ),
+
+            ItemType.IRON_COGS: NodeConfig(
+                queue_size=20,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_COGS,
+                    consumption_time=0.5,
+                ),
+            )
+        }
+    )
     best_simulation_state = run_simulation(best_sim_config)
 
     log_simulation_parameters(best_sim_config)
