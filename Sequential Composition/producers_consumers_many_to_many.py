@@ -278,7 +278,7 @@ def create_simulation_state(sim_config: SimConfig) -> SimulationState:
         queues=queues
     )
 
-def create_states(sim_config: SimConfig) -> tuple[list[ProducerState], list[ConsumerState]]:
+def create_producer_consumer_states(sim_config: SimConfig) -> tuple[list[ProducerState], list[ConsumerState]]:
     """Create and return producer and consumer data stores."""
     producers = []
     consumers = []
@@ -292,30 +292,35 @@ def create_states(sim_config: SimConfig) -> tuple[list[ProducerState], list[Cons
     return producers, consumers
 
 def run_simulation(sim_config: SimConfig) -> SimulationState:
-    """Runs the simulation with the data defined in the provided sim_config dataclass."""
+    """Run the simulation as event-driven, with the data defined in the provided sim_config dataclass """
     simulation_state = create_simulation_state(sim_config)
-    producers, consumers = create_states(sim_config)
+    producers_state, consumers_state = create_producer_consumer_states(sim_config)
     sim_time = 0.0
-    dt = 0.01
     duration = sim_config.simulation_timeout_in_seconds
-    last_queue_log_time = -sim_config.queue_interval
+    queue_interval = sim_config.queue_interval
+    next_queue_log_time = 0.0
+    processes = producers_state + consumers_state
 
     while sim_time < duration:
+        # execute all ready processes
+        for state in processes:
+            if state.next_ready_time <= sim_time:
+                if isinstance(state, ProducerState):
+                    producer(state, simulation_state, sim_config, sim_time)
+                else:
+                    consumer(state, simulation_state, sim_config, sim_time)
 
-        for state in producers:
-            producer(state, simulation_state, sim_config, sim_time)
+        next_event_time = min((p.next_ready_time for p in processes if p.next_ready_time > sim_time), default=None)
+        if next_event_time is None or next_event_time > duration:
+            break
 
-        for state in consumers:
-            consumer(state, simulation_state, sim_config, sim_time)
-
-        if sim_time - last_queue_log_time >= sim_config.queue_interval:
+        # log queue sizes at the defined fixed intervals
+        while next_queue_log_time <= next_event_time:
             for item_type, size in simulation_state.queues.items():
-                simulation_state.queue_logs.append(
-                    QueueLogs(item_type.value, size, sim_time)
-                )
-            last_queue_log_time = sim_time
-
-        sim_time += dt
+                simulation_state.queue_logs.append(QueueLogs(item_type.value, size, next_queue_log_time))
+            next_queue_log_time += queue_interval
+        
+        sim_time = next_event_time
     return simulation_state
 
 # ==================================================================================================
@@ -493,7 +498,7 @@ def main() -> None:
         queue_interval=1.0,
         nodes={
             ItemType.IRON_INGOT: NodeConfig(
-                queue_size=20,
+                queue_size=10,
                 producer=ProducerConfig(
                     count=1,
                     output=ItemType.IRON_INGOT,
@@ -503,12 +508,12 @@ def main() -> None:
                     count=1,
                     input=ItemType.IRON_INGOT,
                     output=ItemType.IRON_ROD,
-                    consumption_time=1,
+                    consumption_time=0.5,
                 ),
             ),
 
             ItemType.IRON_ROD: NodeConfig(
-                queue_size=20,
+                queue_size=10,
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_ROD,
@@ -518,11 +523,11 @@ def main() -> None:
             ),
 
             ItemType.IRON_WIRE: NodeConfig(
-                queue_size=20,
+                queue_size=10,
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_WIRE,
-                    consumption_time=0.5,
+                    consumption_time=1,
                 ),
             )
         }
