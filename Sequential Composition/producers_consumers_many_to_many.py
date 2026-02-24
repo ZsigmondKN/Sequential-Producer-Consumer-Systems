@@ -198,7 +198,6 @@ def plot_producer_consumer_rates(ax: plt.Axes, start_time: float, producer_logs:
                                  consumer_logs: list[SimulationLogs], bucket_size: float = 1.0) -> None:
     item_types = {log.item_type for log in producer_logs + consumer_logs}
     ordered_items = [item.value for item in ItemType if item.value in item_types]
-    # items = sorted({log.item_type for log in list(producer_logs) + list(consumer_logs)})
     all_times = [log.timestamp - start_time for log in list(producer_logs) + list(consumer_logs)]
     max_t = max(all_times + [0])
     bins = np.arange(0, max_t + bucket_size, bucket_size)
@@ -212,8 +211,6 @@ def plot_producer_consumer_rates(ax: plt.Axes, start_time: float, producer_logs:
         cons_times = extract_times(consumer_logs, item)
         prod_counts, _ = np.histogram(prod_times, bins=bins)
         cons_counts, _ = np.histogram(cons_times, bins=bins)
-        # ax.plot(bin_centres, prod_counts, "-o", markersize=4, alpha=0.9, label=f"Prod: {item}")
-        # ax.plot(bin_centres, cons_counts, "--o", markersize=4, alpha=0.9, label=f"Cons: {item}")
 
         if len(prod_times) > 0:
             throughput = prod_counts
@@ -225,23 +222,26 @@ def plot_producer_consumer_rates(ax: plt.Axes, start_time: float, producer_logs:
     ax.set(
         xlabel="Time (seconds)",
         ylabel="Items per second",
-        # title=f"Production & Consumption Rates (bucket={bucket_size}s)",
         title=f"Production & Consumption Throughput (bucket={bucket_size}s)",
     )
     ax.grid(alpha=0.4, linestyle=":")
     ax.legend()
 
-def plot_queue_size_over_time(ax: plt.Axes, start_time: float, queue_logs: list[QueueLogs], 
-                              bar_width: float = 0.4, offset: float = 0) -> None:
+def plot_queue_size_over_time(ax: plt.Axes, start_time: float, queue_logs: list[QueueLogs]) -> None:
     queues: dict[str, list[QueueLogs]] = {}
+
     for log in queue_logs:
         queues.setdefault(log.queue_name, []).append(log)
-    
-    for queue_name, logs in queues.items():
-        time_steps = [log.timestamp - start_time for log in logs]
-        queue_usages = [log.queue_usage for log in logs]
-        ax.bar([t + offset for t in time_steps], queue_usages, bar_width, label=queue_name, alpha=0.6)
-        offset += bar_width
+
+    ordered_names = [item.value for item in ItemType if item.value in queues]
+    for queue_name in ordered_names:
+        logs = queues[queue_name]
+
+        time_steps = np.array([log.timestamp - start_time for log in logs])
+        queue_usages = np.array([log.queue_usage for log in logs])
+        # plot line and then shade below
+        line, = ax.plot(time_steps, queue_usages, label=queue_name)
+        ax.fill_between(time_steps, queue_usages, alpha=0.15, color=line.get_color())
 
     ax.set(
         xlabel="Time (seconds)",
@@ -253,8 +253,7 @@ def plot_queue_size_over_time(ax: plt.Axes, start_time: float, queue_logs: list[
 
 def plot_results(simulation_state: SimulationState, start_time: float = 0.0) -> None:
     """Create one figure containing subplots."""
-    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(6, 6))
-    # fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=False)
+    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(10, 6))
 
     plot_producer_consumer_rates(ax1, start_time, simulation_state.producer_logs, simulation_state.consumer_logs)
     plot_queue_size_over_time(ax2, start_time, simulation_state.queue_logs)
