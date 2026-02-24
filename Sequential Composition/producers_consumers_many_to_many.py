@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 # ==================================================================================================
 
 class ItemType(Enum):
-    IRON_INGOT = "iron ingot"
-    IRON_PLATE = "iron plate"
-    IRON_COGS = "iron cogs"
+    IRON_INGOT = "Iron Ingot"
+    IRON_ROD = "Iron Rod"
+    IRON_WIRE = "Iron Wire"
 
 @dataclass
 class SimulationState:
@@ -94,26 +94,26 @@ class SimConfig:
                 consumer=ConsumerConfig(
                     count=4,
                     input=ItemType.IRON_INGOT,
-                    output=ItemType.IRON_PLATE,
+                    output=ItemType.IRON_ROD,
                     consumption_time=0.5,
                 ),
             ),
 
-            ItemType.IRON_PLATE: NodeConfig(
+            ItemType.IRON_ROD: NodeConfig(
                 queue_size=40,
                 consumer=ConsumerConfig(
                     count=3,
-                    input=ItemType.IRON_PLATE,
-                    output=ItemType.IRON_COGS,
+                    input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
                     consumption_time=0.5,
                 ),
             ),
 
-            ItemType.IRON_COGS: NodeConfig(
+            ItemType.IRON_WIRE: NodeConfig(
                 queue_size=40,
                 consumer=ConsumerConfig(
                     count=1,
-                    input=ItemType.IRON_COGS,
+                    input=ItemType.IRON_WIRE,
                     consumption_time=0.5,
                 ),
             )
@@ -220,7 +220,7 @@ def plot_producer_consumer_rates(ax: plt.Axes, start_time: float, producer_logs:
         else:
             throughput = cons_counts
         
-        ax.plot(bin_centres, throughput, "--o", markersize=4, alpha=0.9, label=f"Throughput: {item}")
+        ax.plot(bin_centres, throughput, "--", markersize=4, alpha=0.9, label=f"Throughput: {item}")
     
     ax.set(
         xlabel="Time (seconds)",
@@ -253,7 +253,8 @@ def plot_queue_size_over_time(ax: plt.Axes, start_time: float, queue_logs: list[
 
 def plot_results(simulation_state: SimulationState, start_time: float = 0.0) -> None:
     """Create one figure containing subplots."""
-    fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=False)
+    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(6, 6))
+    # fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=False)
 
     plot_producer_consumer_rates(ax1, start_time, simulation_state.producer_logs, simulation_state.consumer_logs)
     plot_queue_size_over_time(ax2, start_time, simulation_state.queue_logs)
@@ -326,17 +327,17 @@ def suggest_parameters(trial: optuna.Trial) -> dict:
     return {
         "ingot_prod_time": trial.suggest_float("ingot_prod_time", 1, 5.0),
         "ingot_cons_time": trial.suggest_float("ingot_cons_time", 1, 5.0),
-        "plate_cons_time": trial.suggest_float("plate_cons_time", 1, 5.0),
-        "cogs_cons_time": trial.suggest_float("cogs_cons_time", 1, 5.0),
+        "rod_cons_time": trial.suggest_float("rod_cons_time", 1, 5.0),
+        "wire_cons_time": trial.suggest_float("wire_cons_time", 1, 5.0),
 
         "ingot_producers": trial.suggest_int("ingot_producers", 1, 5),
         "ingot_consumers": trial.suggest_int("ingot_consumers", 1, 5),
-        "plate_consumers": trial.suggest_int("plate_consumers", 1, 5),
-        "cogs_consumers": trial.suggest_int("cogs_consumers", 1, 5),
+        "rod_consumers": trial.suggest_int("rod_consumers", 1, 5),
+        "wire_consumers": trial.suggest_int("wire_consumers", 1, 5),
 
         "ingot_qsize": trial.suggest_int("ingot_qsize", 50, 200),
-        "plate_qsize": trial.suggest_int("plate_qsize", 50, 200),
-        "cogs_qsize": trial.suggest_int("cogs_qsize", 50, 200),
+        "rod_qsize": trial.suggest_int("rod_qsize", 50, 200),
+        "wire_qsize": trial.suggest_int("wire_qsize", 50, 200),
     }
 
 def populate_sim_config(best_parameters: dict) -> SimConfig:
@@ -354,25 +355,25 @@ def populate_sim_config(best_parameters: dict) -> SimConfig:
                 consumer=ConsumerConfig(
                     count=best_parameters["ingot_consumers"],
                     input=ItemType.IRON_INGOT,
-                    output=ItemType.IRON_PLATE,
+                    output=ItemType.IRON_ROD,
                     consumption_time=best_parameters["ingot_cons_time"],
                 ),
             ),
-            ItemType.IRON_PLATE: NodeConfig(
-                queue_size=best_parameters["plate_qsize"],
+            ItemType.IRON_ROD: NodeConfig(
+                queue_size=best_parameters["rod_qsize"],
                 consumer=ConsumerConfig(
-                    count=best_parameters["plate_consumers"],
-                    input=ItemType.IRON_PLATE,
-                    output=ItemType.IRON_COGS,
-                    consumption_time=best_parameters["plate_cons_time"],
+                    count=best_parameters["rod_consumers"],
+                    input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
+                    consumption_time=best_parameters["rod_cons_time"],
                 ),
             ),
-            ItemType.IRON_COGS: NodeConfig(
-                queue_size=best_parameters["cogs_qsize"],
+            ItemType.IRON_WIRE: NodeConfig(
+                queue_size=best_parameters["wire_qsize"],
                 consumer=ConsumerConfig(
-                    count=best_parameters["cogs_consumers"],
-                    input=ItemType.IRON_COGS,
-                    consumption_time=best_parameters["cogs_cons_time"],
+                    count=best_parameters["wire_consumers"],
+                    input=ItemType.IRON_WIRE,
+                    consumption_time=best_parameters["wire_cons_time"],
                 ),
             ),
         },
@@ -388,14 +389,14 @@ def objective(trial: optuna.Trial) -> float:
 def compute_score(simulation_state: SimulationState, sim_config: SimConfig, params: dict) ->float:
     ingot_prod_rate = params["ingot_producers"] / params["ingot_prod_time"]
     ingot_cons_rate = params["ingot_consumers"] / params["ingot_cons_time"]
-    plate_cons_rate = params["plate_consumers"] / params["plate_cons_time"]
-    cogs_cons_rate = params["cogs_consumers"] / params["cogs_cons_time"]
+    rod_cons_rate = params["rod_consumers"] / params["rod_cons_time"]
+    wire_cons_rate = params["wire_consumers"] / params["wire_cons_time"]
 
     rates = np.array([
         ingot_prod_rate,
         ingot_cons_rate,
-        plate_cons_rate,
-        cogs_cons_rate,
+        rod_cons_rate,
+        wire_cons_rate,
     ])
 
     # ---- Oscillation metric: FFT peak energy ----
@@ -462,8 +463,8 @@ def compute_score(simulation_state: SimulationState, sim_config: SimConfig, para
     rates = np.array([
         ingot_prod_rate,
         ingot_cons_rate,
-        plate_cons_rate,
-        cogs_cons_rate
+        rod_cons_rate,
+        wire_cons_rate
     ])
 
     imbalance = np.std(rates) / (np.mean(rates) + 1e-8)
@@ -502,26 +503,26 @@ def main() -> None:
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_INGOT,
-                    output=ItemType.IRON_PLATE,
+                    output=ItemType.IRON_ROD,
                     consumption_time=1,
                 ),
             ),
 
-            ItemType.IRON_PLATE: NodeConfig(
+            ItemType.IRON_ROD: NodeConfig(
                 queue_size=20,
                 consumer=ConsumerConfig(
                     count=1,
-                    input=ItemType.IRON_PLATE,
-                    output=ItemType.IRON_COGS,
+                    input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
                     consumption_time=0.5,
                 ),
             ),
 
-            ItemType.IRON_COGS: NodeConfig(
+            ItemType.IRON_WIRE: NodeConfig(
                 queue_size=20,
                 consumer=ConsumerConfig(
                     count=1,
-                    input=ItemType.IRON_COGS,
+                    input=ItemType.IRON_WIRE,
                     consumption_time=0.5,
                 ),
             )
