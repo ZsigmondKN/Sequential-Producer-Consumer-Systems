@@ -1,5 +1,4 @@
 import logging
-import optuna
 import numpy as np
 import matplotlib.pyplot as plt
 from enum import Enum
@@ -79,20 +78,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(m
 
 @dataclass(frozen=True)
 class SimConfig:
-    simulation_timeout_in_seconds: int = 30
+    simulation_timeout_in_seconds: int = 60
     queue_interval: float = 1.0
 
     nodes: dict[ItemType, NodeConfig] = field(
         default_factory=lambda: {
             ItemType.IRON_INGOT: NodeConfig(
-                queue_size=20,
+                queue_size=10,
                 producer=ProducerConfig(
-                    count=5,
+                    count=1,
                     output=ItemType.IRON_INGOT,
                     production_time=0.5,
                 ),
                 consumer=ConsumerConfig(
-                    count=4,
+                    count=1,
                     input=ItemType.IRON_INGOT,
                     output=ItemType.IRON_ROD,
                     consumption_time=0.5,
@@ -100,9 +99,9 @@ class SimConfig:
             ),
 
             ItemType.IRON_ROD: NodeConfig(
-                queue_size=40,
+                queue_size=10,
                 consumer=ConsumerConfig(
-                    count=3,
+                    count=1,
                     input=ItemType.IRON_ROD,
                     output=ItemType.IRON_WIRE,
                     consumption_time=0.5,
@@ -110,11 +109,11 @@ class SimConfig:
             ),
 
             ItemType.IRON_WIRE: NodeConfig(
-                queue_size=40,
+                queue_size=10,
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_WIRE,
-                    consumption_time=0.5,
+                    consumption_time=1,
                 ),
             )
         }
@@ -253,7 +252,7 @@ def plot_queue_size_over_time(ax: plt.Axes, start_time: float, queue_logs: list[
 
 def plot_results(simulation_state: SimulationState, start_time: float = 0.0) -> None:
     """Create one figure containing subplots."""
-    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(10, 6))
+    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(8, 6))
 
     plot_producer_consumer_rates(ax1, start_time, simulation_state.producer_logs, simulation_state.consumer_logs)
     plot_queue_size_over_time(ax2, start_time, simulation_state.queue_logs)
@@ -324,219 +323,17 @@ def run_simulation(sim_config: SimConfig) -> SimulationState:
     return simulation_state
 
 # ==================================================================================================
-# Optuna Objective Setup
-# ==================================================================================================
-
-def suggest_parameters(trial: optuna.Trial) -> dict:
-    return {
-        "ingot_prod_time": trial.suggest_float("ingot_prod_time", 1, 5.0),
-        "ingot_cons_time": trial.suggest_float("ingot_cons_time", 1, 5.0),
-        "rod_cons_time": trial.suggest_float("rod_cons_time", 1, 5.0),
-        "wire_cons_time": trial.suggest_float("wire_cons_time", 1, 5.0),
-
-        "ingot_producers": trial.suggest_int("ingot_producers", 1, 5),
-        "ingot_consumers": trial.suggest_int("ingot_consumers", 1, 5),
-        "rod_consumers": trial.suggest_int("rod_consumers", 1, 5),
-        "wire_consumers": trial.suggest_int("wire_consumers", 1, 5),
-
-        "ingot_qsize": trial.suggest_int("ingot_qsize", 50, 200),
-        "rod_qsize": trial.suggest_int("rod_qsize", 50, 200),
-        "wire_qsize": trial.suggest_int("wire_qsize", 50, 200),
-    }
-
-def populate_sim_config(best_parameters: dict) -> SimConfig:
-    return SimConfig(
-        simulation_timeout_in_seconds=300,
-        queue_interval=1,
-        nodes={
-            ItemType.IRON_INGOT: NodeConfig(
-                queue_size=best_parameters["ingot_qsize"],
-                producer=ProducerConfig(
-                    count=best_parameters["ingot_producers"],
-                    output=ItemType.IRON_INGOT,
-                    production_time=best_parameters["ingot_prod_time"],
-                ),
-                consumer=ConsumerConfig(
-                    count=best_parameters["ingot_consumers"],
-                    input=ItemType.IRON_INGOT,
-                    output=ItemType.IRON_ROD,
-                    consumption_time=best_parameters["ingot_cons_time"],
-                ),
-            ),
-            ItemType.IRON_ROD: NodeConfig(
-                queue_size=best_parameters["rod_qsize"],
-                consumer=ConsumerConfig(
-                    count=best_parameters["rod_consumers"],
-                    input=ItemType.IRON_ROD,
-                    output=ItemType.IRON_WIRE,
-                    consumption_time=best_parameters["rod_cons_time"],
-                ),
-            ),
-            ItemType.IRON_WIRE: NodeConfig(
-                queue_size=best_parameters["wire_qsize"],
-                consumer=ConsumerConfig(
-                    count=best_parameters["wire_consumers"],
-                    input=ItemType.IRON_WIRE,
-                    consumption_time=best_parameters["wire_cons_time"],
-                ),
-            ),
-        },
-    )
-
-def objective(trial: optuna.Trial) -> float:
-    params = suggest_parameters(trial)
-    sim_config = populate_sim_config(params)
-    simulation_state = run_simulation(sim_config)
-
-    return compute_score(simulation_state, sim_config, params)
-
-def compute_score(simulation_state: SimulationState, sim_config: SimConfig, params: dict) ->float:
-    ingot_prod_rate = params["ingot_producers"] / params["ingot_prod_time"]
-    ingot_cons_rate = params["ingot_consumers"] / params["ingot_cons_time"]
-    rod_cons_rate = params["rod_consumers"] / params["rod_cons_time"]
-    wire_cons_rate = params["wire_consumers"] / params["wire_cons_time"]
-
-    rates = np.array([
-        ingot_prod_rate,
-        ingot_cons_rate,
-        rod_cons_rate,
-        wire_cons_rate,
-    ])
-
-    # ---- Oscillation metric: FFT peak energy ----
-    total_score = 0.0
-
-    for item_type in ItemType:
-        usages = [
-            log.queue_usage
-            for log in simulation_state.queue_logs
-            if log.queue_name == item_type.value
-        ]
-
-        if len(usages) > 10:
-
-            # Drop first 30% (remove transient ramp)
-            cutoff = int(len(usages) * 0.3)
-            usages = usages[cutoff:]
-
-            capacity = sim_config.nodes[item_type].queue_size
-            signal = np.array(usages) / capacity
-
-            # Remove mean (remove DC component)
-            signal = signal - np.mean(signal)
-
-            # Remove transient
-            cutoff = int(len(usages) * 0.3)
-            signal = np.array(usages[cutoff:]) / capacity
-
-            if len(signal) < 30:
-                continue
-
-            # Light smoothing
-            signal = np.convolve(signal, np.ones(3)/3, mode="same")
-
-            # Remove mean
-            signal -= np.mean(signal)
-
-            # 1. Amplitude
-            amplitude = np.std(signal)
-
-            # 2. Drift penalty
-            trend = np.polyfit(np.arange(len(signal)), signal, 1)[0]
-            drift_penalty = abs(trend)
-
-            # 3. Autocorrelation peak
-            corr = np.correlate(signal, signal, mode="full")
-            corr = corr[len(corr)//2:]
-            corr[0] = 0
-
-            if len(corr) > 5:
-                periodicity = np.max(corr[5:])
-            else:
-                periodicity = 0
-
-            oscillation_score = (
-                amplitude
-                * periodicity
-                / (1.0 + 10.0 * drift_penalty)
-            )
-
-            total_score += oscillation_score
-
-    # --- Enforce near flow equilibrium ---
-    rates = np.array([
-        ingot_prod_rate,
-        ingot_cons_rate,
-        rod_cons_rate,
-        wire_cons_rate
-    ])
-
-    imbalance = np.std(rates) / (np.mean(rates) + 1e-8)
-
-    # Strong penalty for imbalance
-    total_score -= 20.0 * imbalance
-
-    return total_score
-
-# ==================================================================================================
 # Main function
 # ==================================================================================================
 
 def main() -> None:
     """Main function for running the simulation."""
-    # study = optuna.create_study(direction="maximize")
-    # study.optimize(objective, n_trials=100)
+    sim_config = SimConfig()
+    sim_state = run_simulation(sim_config)
 
-    # print("Best value:", study.best_value)
-    # print("Best params:", study.best_params)
-
-    # Rebuild best results from Optuna runs
-    # best_parameters = study.best_params
-    # best_sim_config = populate_sim_config(best_parameters)
-    best_sim_config = SimConfig(
-        simulation_timeout_in_seconds=60,
-        queue_interval=1.0,
-        nodes={
-            ItemType.IRON_INGOT: NodeConfig(
-                queue_size=10,
-                producer=ProducerConfig(
-                    count=1,
-                    output=ItemType.IRON_INGOT,
-                    production_time=0.5,
-                ),
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_INGOT,
-                    output=ItemType.IRON_ROD,
-                    consumption_time=0.5,
-                ),
-            ),
-
-            ItemType.IRON_ROD: NodeConfig(
-                queue_size=10,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_ROD,
-                    output=ItemType.IRON_WIRE,
-                    consumption_time=0.5,
-                ),
-            ),
-
-            ItemType.IRON_WIRE: NodeConfig(
-                queue_size=10,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_WIRE,
-                    consumption_time=1,
-                ),
-            )
-        }
-    )
-    best_simulation_state = run_simulation(best_sim_config)
-
-    log_simulation_parameters(best_sim_config)
-    log_results(best_simulation_state)
-    plot_results(best_simulation_state)
+    log_simulation_parameters(sim_config)
+    log_results(sim_state)
+    plot_results(sim_state)
 
 if __name__ == '__main__':
     main()
