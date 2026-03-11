@@ -370,87 +370,72 @@ def run_simulation(sim_config: SimConfig) -> SimulationState:
 # Optuna
 # ==================================================================================================
 
-def objective(trial: optuna.Trial) -> float:
-    """The function Optuna will try to maximize."""
-    
-    test_sensitivity = trial.suggest_float('reaction_sensitivity', 0.01, 0.4)
-    test_delay = trial.suggest_float('feedback_delay', 2.0, 25.0)
+def objective(trial):
 
-    # 1. We increase the timeout to 400s to give waves time to prove they are sustained
+    test_sensitivity = trial.suggest_float('reaction_sensitivity', 0.01, 0.2)
+
+    production_time = 1.0
+    test_delay = trial.suggest_float('feedback_delay', production_time, production_time * 35)
     sim_config = SimConfig(
         simulation_timeout_in_seconds=400,
         queue_interval=1.0,
         use_feedback=True,
         nodes={
             ItemType.IRON_INGOT: NodeConfig(
-                queue_size=250,  
+                queue_size=200,
                 producer=ProducerConfig(
-                    count=1, output=ItemType.IRON_INGOT, production_time=1.0,        
-                    target_queue_size=125, reaction_sensitivity=test_sensitivity, feedback_delay=test_delay         
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=production_time,
+                    target_queue_size=100,
+                    reaction_sensitivity=test_sensitivity,
+                    feedback_delay=test_delay
                 ),
                 consumer=ConsumerConfig(
-                    count=1, input=ItemType.IRON_INGOT, output=ItemType.IRON_ROD, consumption_time=1.0, 
-                    target_queue_size=125, reaction_sensitivity=test_sensitivity, feedback_delay=test_delay
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    consumption_time=1.0
                 ),
             ),
-            ItemType.IRON_ROD: NodeConfig(
-                queue_size=250,
-                consumer=ConsumerConfig(
-                    count=1, input=ItemType.IRON_ROD, output=ItemType.IRON_WIRE, consumption_time=1.0, 
-                    target_queue_size=125, reaction_sensitivity=test_sensitivity, feedback_delay=test_delay
-                ),
-            ),
-            ItemType.IRON_WIRE: NodeConfig(
-                queue_size=250,
-                consumer=ConsumerConfig(count=1, input=ItemType.IRON_WIRE, consumption_time=1.0),
-            )
         }
     )
 
     sim_state = run_simulation(sim_config)
 
-    # Look at the data after the initial startup phase (after 150 seconds)
-    late_stage_queue_sizes = [
-        log.queue_usage for log in sim_state.queue_logs 
-        if log.queue_name == ItemType.IRON_ROD.value and log.timestamp > 150.0
+    warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.4
+
+    late_stage = [
+        log.queue_usage for log in sim_state.queue_logs
+        if log.timestamp > warmup_cutoff
     ]
 
-    if not late_stage_queue_sizes:
-        return 0.0
+    if not late_stage:
+        return 0
 
-    # Count how many times we cross the middle line
+    std_dev = np.std(late_stage)
+
     crossings = 0
-    for i in range(1, len(late_stage_queue_sizes)):
-        prev = late_stage_queue_sizes[i-1]
-        curr = late_stage_queue_sizes[i]
-        if (prev < 125 and curr >= 125) or (prev >= 125 and curr < 125):
+    for i in range(2, len(late_stage)):
+        a, b, c = late_stage[i-2], late_stage[i-1], late_stage[i]
+        if (b > a and b > c) or (b < a and b < c):
             crossings += 1
 
-    # REQUIREMENT: Must have at least 4 center-line crossings to be considered a sustained wave
-    if crossings < 4:
-        return 0.0 
+    capacity = sim_config.nodes[ItemType.IRON_INGOT].queue_size
+    min_q = min(late_stage)
+    max_q = max(late_stage)
 
-    # SOFT PENALTY: Instead of instantly failing, we subtract points if it gets too close to the edges
-    min_q = min(late_stage_queue_sizes)
-    max_q = max(late_stage_queue_sizes)
-    
-    penalty = 0.0
-    if min_q < 20:
-        penalty += (20 - min_q) * 5  # Lose points for getting too close to 0
-    if max_q > 230:
-        penalty += (max_q - 230) * 5  # Lose points for getting too close to 250
+    penalty = 0
+    if min_q < 0.08 * capacity:
+        penalty += (0.08 * capacity - min_q)
+    if max_q > 0.92 * capacity:
+        penalty += (max_q - 0.92 * capacity)
 
-    # The ideal score: High amplitude (std_dev) MULTIPLIED by frequency (crossings), minus any boundary penalties
-    std_dev = np.std(late_stage_queue_sizes)
     score = (std_dev * crossings) - penalty
 
     return float(score)
 
-# ==================================================================================================
-# Main function
-# ==================================================================================================
 
-def main() -> None:
+def run_optuna() -> None:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction='maximize')
     
@@ -477,27 +462,15 @@ def main() -> None:
         use_feedback=True,
         nodes={
             ItemType.IRON_INGOT: NodeConfig(
-                queue_size=250,  
+                queue_size=200,  
                 producer=ProducerConfig(
                     count=1, output=ItemType.IRON_INGOT, production_time=1.0,        
-                    target_queue_size=125, reaction_sensitivity=best_sensitivity, feedback_delay=best_delay         
+                    target_queue_size=100, reaction_sensitivity=best_sensitivity, feedback_delay=best_delay         
                 ),
                 consumer=ConsumerConfig(
-                    count=1, input=ItemType.IRON_INGOT, output=ItemType.IRON_ROD, consumption_time=1.0, 
-                    target_queue_size=125, reaction_sensitivity=best_sensitivity, feedback_delay=best_delay
+                    count=1, input=ItemType.IRON_INGOT, consumption_time=1.0
                 ),
             ),
-            ItemType.IRON_ROD: NodeConfig(
-                queue_size=250,
-                consumer=ConsumerConfig(
-                    count=1, input=ItemType.IRON_ROD, output=ItemType.IRON_WIRE, consumption_time=1.0, 
-                    target_queue_size=125, reaction_sensitivity=best_sensitivity, feedback_delay=best_delay
-                ),
-            ),
-            ItemType.IRON_WIRE: NodeConfig(
-                queue_size=250,
-                consumer=ConsumerConfig(count=1, input=ItemType.IRON_WIRE, consumption_time=1.0),
-            )
         }
     )
 
@@ -505,6 +478,22 @@ def main() -> None:
     log_simulation_parameters(best_sim_config)
     log_results(best_sim_state)
     plot_results(best_sim_state)
+
+def run_individual() -> None:
+    sim_config = sim_scenarios.get_a_single_oscillation()
+    sim_state = run_simulation(sim_config)
+
+    log_simulation_parameters(sim_config)
+    log_results(sim_state)
+    plot_results(sim_state)
+
+# ==================================================================================================
+# Main function
+# ==================================================================================================
+
+def main() -> None:
+    """Main function for running the simulation."""
+    run_individual()
 
 if __name__ == '__main__':
     main()
