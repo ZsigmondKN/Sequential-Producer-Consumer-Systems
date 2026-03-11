@@ -2,9 +2,12 @@ import logging
 import math
 import numpy as np
 import matplotlib.pyplot as plt
+import optuna
+import optuna.visualization as vis
 from enum import Enum
 from collections import Counter
 from dataclasses import dataclass, field
+
 import sim_scenarios
 
 # --------------------------------------------------------------------------------------------------
@@ -190,13 +193,33 @@ def calculate_adjusted_time(base_time: float, target_queue_size: int, reaction_s
 
 def log_simulation_parameters(sim_config: SimConfig) -> None:
     """Log the parameters the simulation is using."""
-    logging.info(f"The simulation will be running for {sim_config.simulation_timeout_in_seconds} seconds. ")
+    logging.info(f"The simulation will be running for {sim_config.simulation_timeout_in_seconds} seconds.")
+    logging.info(f"Feedback enabled: {sim_config.use_feedback}")
+
     for item_type, node_config in sim_config.nodes.items():
         config_info = f"The {item_type.value} node has - queue size: {node_config.queue_size}"
         if node_config.producer.count > 0:
-            config_info += f" | producer/s count: {node_config.producer.count} | production time(s): {node_config.producer.production_time}"
+            config_info += (
+                f" | producer/s count: {node_config.producer.count}"
+                f" | production time(s): {node_config.producer.production_time}"
+            )
+            if sim_config.use_feedback:
+                config_info += (
+                    f" | target queue: {node_config.producer.target_queue_size}"
+                    f" | sensitivity: {node_config.producer.reaction_sensitivity}"
+                    f" | delay: {node_config.producer.feedback_delay}"
+                )
         if node_config.consumer.count > 0:
-            config_info += f" | consumer/s count: {node_config.consumer.count} | consumption time(s): {node_config.consumer.consumption_time}"
+            config_info += (
+                f" | consumer/s count: {node_config.consumer.count}"
+                f" | consumption time(s): {node_config.consumer.consumption_time}"
+            )
+            if sim_config.use_feedback:
+                config_info += (
+                    f" | target queue: {node_config.consumer.target_queue_size}"
+                    f" | sensitivity: {node_config.consumer.reaction_sensitivity}"
+                    f" | delay: {node_config.consumer.feedback_delay}"
+                )
         logging.info(config_info)
 
 def log_results(simulation_state: SimulationState) -> None:
@@ -344,18 +367,144 @@ def run_simulation(sim_config: SimConfig) -> SimulationState:
     return simulation_state
 
 # ==================================================================================================
+# Optuna
+# ==================================================================================================
+
+def objective(trial: optuna.Trial) -> float:
+    """The function Optuna will try to maximize."""
+    
+    test_sensitivity = trial.suggest_float('reaction_sensitivity', 0.01, 0.4)
+    test_delay = trial.suggest_float('feedback_delay', 2.0, 25.0)
+
+    # 1. We increase the timeout to 400s to give waves time to prove they are sustained
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=400,
+        queue_interval=1.0,
+        use_feedback=True,
+        nodes={
+            ItemType.IRON_INGOT: NodeConfig(
+                queue_size=250,  
+                producer=ProducerConfig(
+                    count=1, output=ItemType.IRON_INGOT, production_time=1.0,        
+                    target_queue_size=125, reaction_sensitivity=test_sensitivity, feedback_delay=test_delay         
+                ),
+                consumer=ConsumerConfig(
+                    count=1, input=ItemType.IRON_INGOT, output=ItemType.IRON_ROD, consumption_time=1.0, 
+                    target_queue_size=125, reaction_sensitivity=test_sensitivity, feedback_delay=test_delay
+                ),
+            ),
+            ItemType.IRON_ROD: NodeConfig(
+                queue_size=250,
+                consumer=ConsumerConfig(
+                    count=1, input=ItemType.IRON_ROD, output=ItemType.IRON_WIRE, consumption_time=1.0, 
+                    target_queue_size=125, reaction_sensitivity=test_sensitivity, feedback_delay=test_delay
+                ),
+            ),
+            ItemType.IRON_WIRE: NodeConfig(
+                queue_size=250,
+                consumer=ConsumerConfig(count=1, input=ItemType.IRON_WIRE, consumption_time=1.0),
+            )
+        }
+    )
+
+    sim_state = run_simulation(sim_config)
+
+    # Look at the data after the initial startup phase (after 150 seconds)
+    late_stage_queue_sizes = [
+        log.queue_usage for log in sim_state.queue_logs 
+        if log.queue_name == ItemType.IRON_ROD.value and log.timestamp > 150.0
+    ]
+
+    if not late_stage_queue_sizes:
+        return 0.0
+
+    # Count how many times we cross the middle line
+    crossings = 0
+    for i in range(1, len(late_stage_queue_sizes)):
+        prev = late_stage_queue_sizes[i-1]
+        curr = late_stage_queue_sizes[i]
+        if (prev < 125 and curr >= 125) or (prev >= 125 and curr < 125):
+            crossings += 1
+
+    # REQUIREMENT: Must have at least 4 center-line crossings to be considered a sustained wave
+    if crossings < 4:
+        return 0.0 
+
+    # SOFT PENALTY: Instead of instantly failing, we subtract points if it gets too close to the edges
+    min_q = min(late_stage_queue_sizes)
+    max_q = max(late_stage_queue_sizes)
+    
+    penalty = 0.0
+    if min_q < 20:
+        penalty += (20 - min_q) * 5  # Lose points for getting too close to 0
+    if max_q > 230:
+        penalty += (max_q - 230) * 5  # Lose points for getting too close to 250
+
+    # The ideal score: High amplitude (std_dev) MULTIPLIED by frequency (crossings), minus any boundary penalties
+    std_dev = np.std(late_stage_queue_sizes)
+    score = (std_dev * crossings) - penalty
+
+    return float(score)
+
+# ==================================================================================================
 # Main function
 # ==================================================================================================
 
 def main() -> None:
-    """Main function for running the simulation."""
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction='maximize')
+    
+    logging.info("Starting Optuna optimization... Please wait while it runs 300 simulations.")
+    
+    # Run 300 times so Optuna has room to learn!
+    study.optimize(objective, n_trials=300) 
 
-    sim_config = sim_scenarios.get_smooth_waves()
-    sim_state = run_simulation(sim_config)
+    contour_plot = vis.plot_contour(study, params=['reaction_sensitivity', 'feedback_delay'])
+    contour_plot.show()
+    
+    best_sensitivity = study.best_params['reaction_sensitivity']
+    best_delay = study.best_params['feedback_delay']
+    
+    logging.info("\n--- Optimization Finished ---")
+    logging.info(f"Best Oscillation Score: {study.best_value:.2f}")
+    logging.info(f"Winning Parameters: Sensitivity = {best_sensitivity:.4f}, Delay = {best_delay:.2f}s")
+    logging.info("\nRunning final simulation with the best parameters to plot results...")
+    
+    # Final plot config (make sure to match the 400s timeout!)
+    best_sim_config = SimConfig(
+        simulation_timeout_in_seconds=400,
+        queue_interval=1.0,
+        use_feedback=True,
+        nodes={
+            ItemType.IRON_INGOT: NodeConfig(
+                queue_size=250,  
+                producer=ProducerConfig(
+                    count=1, output=ItemType.IRON_INGOT, production_time=1.0,        
+                    target_queue_size=125, reaction_sensitivity=best_sensitivity, feedback_delay=best_delay         
+                ),
+                consumer=ConsumerConfig(
+                    count=1, input=ItemType.IRON_INGOT, output=ItemType.IRON_ROD, consumption_time=1.0, 
+                    target_queue_size=125, reaction_sensitivity=best_sensitivity, feedback_delay=best_delay
+                ),
+            ),
+            ItemType.IRON_ROD: NodeConfig(
+                queue_size=250,
+                consumer=ConsumerConfig(
+                    count=1, input=ItemType.IRON_ROD, output=ItemType.IRON_WIRE, consumption_time=1.0, 
+                    target_queue_size=125, reaction_sensitivity=best_sensitivity, feedback_delay=best_delay
+                ),
+            ),
+            ItemType.IRON_WIRE: NodeConfig(
+                queue_size=250,
+                consumer=ConsumerConfig(count=1, input=ItemType.IRON_WIRE, consumption_time=1.0),
+            )
+        }
+    )
 
-    log_simulation_parameters(sim_config)
-    log_results(sim_state)
-    plot_results(sim_state)
+    best_sim_state = run_simulation(best_sim_config)
+    log_simulation_parameters(best_sim_config)
+    log_results(best_sim_state)
+    plot_results(best_sim_state)
 
 if __name__ == '__main__':
     main()
