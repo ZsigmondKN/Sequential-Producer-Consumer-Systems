@@ -1,9 +1,11 @@
 import logging
+import math
 import numpy as np
 import matplotlib.pyplot as plt
 from enum import Enum
 from collections import Counter
 from dataclasses import dataclass, field
+import sim_scenarios
 
 # --------------------------------------------------------------------------------------------------
 # Running instructions 
@@ -25,6 +27,7 @@ class SimulationState:
     consumer_logs: list
     queue_logs: list
     queues: dict[ItemType, int]
+    queue_history: dict[ItemType, list[tuple[float, int]]]
 
 @dataclass
 class ProducerState:
@@ -56,6 +59,10 @@ class ProducerConfig:
     count: int = 0
     output: ItemType | None = None
     production_time: float | None = None
+    # P-Control below
+    target_queue_size: int | None = None
+    reaction_sensitivity: float = 0.0
+    feedback_delay: float = 0.0
 
 @dataclass(frozen=True)
 class ConsumerConfig:
@@ -63,6 +70,10 @@ class ConsumerConfig:
     input: ItemType | None = None
     output: ItemType | None = None
     consumption_time: float | None = None
+    # P-Control below
+    target_queue_size: int | None = None
+    reaction_sensitivity: float = 0.0
+    feedback_delay: float = 0.0
 
 @dataclass(frozen=True)
 class NodeConfig:
@@ -78,46 +89,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(m
 
 @dataclass(frozen=True)
 class SimConfig:
-    simulation_timeout_in_seconds: int = 60
+    simulation_timeout_in_seconds: int = 200
     queue_interval: float = 1.0
-
-    nodes: dict[ItemType, NodeConfig] = field(
-        default_factory=lambda: {
-            ItemType.IRON_INGOT: NodeConfig(
-                queue_size=10,
-                producer=ProducerConfig(
-                    count=1,
-                    output=ItemType.IRON_INGOT,
-                    production_time=0.5,
-                ),
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_INGOT,
-                    output=ItemType.IRON_ROD,
-                    consumption_time=0.5,
-                ),
-            ),
-
-            ItemType.IRON_ROD: NodeConfig(
-                queue_size=10,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_ROD,
-                    output=ItemType.IRON_WIRE,
-                    consumption_time=0.5,
-                ),
-            ),
-
-            ItemType.IRON_WIRE: NodeConfig(
-                queue_size=10,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_WIRE,
-                    consumption_time=1,
-                ),
-            )
-        }
-    )
+    use_feedback: bool = False
+    nodes: dict[ItemType, NodeConfig] = field(default_factory=dict)
 
 # ==================================================================================================
 # Main processes
@@ -127,7 +102,7 @@ def producer(state: ProducerState, simulation_state: SimulationState, sim_config
     """Run a producer process that generates the specified item type and places them into a queue."""
     node = sim_config.nodes[state.item_type]
     output_type = node.producer.output
-    production_time = node.producer.production_time
+    base_production_time = node.producer.production_time
 
     if sim_time < state.next_ready_time:
         return
@@ -136,10 +111,18 @@ def producer(state: ProducerState, simulation_state: SimulationState, sim_config
     max_size = sim_config.nodes[output_type].queue_size
     if queue_size >= max_size:
         return
+    
+    if sim_config.use_feedback:
+        next_production_time = calculate_adjusted_time(
+            base_production_time, node.producer.target_queue_size, node.producer.reaction_sensitivity, 
+            node.producer.feedback_delay, simulation_state.queue_history[output_type], sim_time)
+    else:
+        next_production_time = base_production_time
 
     simulation_state.queues[output_type] += 1
+    simulation_state.queue_history[output_type].append((sim_time, simulation_state.queues[output_type]))
     simulation_state.producer_logs.append(SimulationLogs(state.process_id, state.item_type.value, sim_time))
-    state.next_ready_time = sim_time + production_time
+    state.next_ready_time = sim_time + next_production_time
 
 def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config: SimConfig, sim_time: float) -> None:
     """Run a consumer process that retrieves and processes items from the provided queue."""
@@ -156,16 +139,51 @@ def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config
     if output_type is not None:
         if simulation_state.queues[output_type] >= sim_config.nodes[output_type].queue_size:
             return
+        
+    if output_type is None or sim_config.use_feedback is False:
+        adjusted_consumption_time = consumption_time
+    else:
+        adjusted_consumption_time = calculate_adjusted_time(
+            consumption_time, node.consumer.target_queue_size, node.consumer.reaction_sensitivity,
+            node.consumer.feedback_delay, simulation_state.queue_history[output_type], sim_time)
 
     simulation_state.queues[input_type] -= 1
+    simulation_state.queue_history[input_type].append((sim_time, simulation_state.queues[input_type]))
     simulation_state.consumer_logs.append(SimulationLogs(state.process_id, state.item_type.value, sim_time))
 
     if output_type is not None:
         simulation_state.queues[output_type] += 1
+        simulation_state.queue_history[output_type].append((sim_time, simulation_state.queues[output_type]))
         simulation_state.producer_logs.append(SimulationLogs(state.process_id, output_type.value, sim_time))
 
-    state.next_ready_time = sim_time + consumption_time
+    state.next_ready_time = sim_time + adjusted_consumption_time
 
+def get_delayed_queue_size(history: list[tuple[float, int]], current_time: float, delay: float) -> int:
+    """Returns the size of the queue exactly 'delay' seconds ago."""
+    target_time = current_time - delay
+    # Assume empty before the delay period has passed
+    if target_time <= 0.0:
+        return 0
+    
+    for timestamp, size in reversed(history):
+        if timestamp <= target_time:
+            return size
+    return 0
+
+def calculate_adjusted_time(base_time: float, target_queue_size: int, reaction_sensitivity: float, 
+    feedback_delay: float, queue_history: list[tuple[float, int]], sim_time: float) -> float:
+    """Calculates the adjusted processing time using a smooth bounded S-curve."""
+    delayed_queue = get_delayed_queue_size(queue_history, sim_time, feedback_delay)
+    dif_from_target = target_queue_size - delayed_queue
+    
+    # Calculate the raw control signal
+    control_signal = reaction_sensitivity * dif_from_target
+    
+    # Use exp() and atan() to gracefully bound the time variation
+    # This acts as a natural limit, preventing the process from going to sleep forever
+    time_multiplier = math.exp(-math.atan(control_signal))
+    
+    return base_time * time_multiplier
 # ==================================================================================================
 # Reporting - logs and diagrams
 # ==================================================================================================
@@ -267,14 +285,17 @@ def plot_results(simulation_state: SimulationState, start_time: float = 0.0) -> 
 def create_simulation_state(sim_config: SimConfig) -> SimulationState:
     """Create and return a SimulationState dataclass with initialized shared resources."""
     queues = {}
+    queue_history = {}
     for item_type in sim_config.nodes:
         queues[item_type] = 0
+        queue_history[item_type] = [(0.0, 0)]
 
     return SimulationState(
         producer_logs=[],
         consumer_logs=[],
         queue_logs=[],
-        queues=queues
+        queues=queues,
+        queue_history=queue_history
     )
 
 def create_producer_consumer_states(sim_config: SimConfig) -> tuple[list[ProducerState], list[ConsumerState]]:
@@ -328,7 +349,8 @@ def run_simulation(sim_config: SimConfig) -> SimulationState:
 
 def main() -> None:
     """Main function for running the simulation."""
-    sim_config = SimConfig()
+
+    sim_config = sim_scenarios.get_smooth_waves()
     sim_state = run_simulation(sim_config)
 
     log_simulation_parameters(sim_config)
