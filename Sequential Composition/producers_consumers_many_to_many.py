@@ -144,6 +144,7 @@ def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config
             return
         
     if output_type is None or sim_config.use_feedback is False:
+        consumption_time = 1.0 + np.random.normal(0, 0.5)
         adjusted_consumption_time = consumption_time
     else:
         adjusted_consumption_time = calculate_adjusted_time(
@@ -166,7 +167,7 @@ def get_delayed_queue_size(history: list[tuple[float, int]], current_time: float
     target_time = current_time - delay
     # Assume empty before the delay period has passed
     if target_time <= 0.0:
-        return 0
+        return history[0][1]
     
     for timestamp, size in reversed(history):
         if timestamp <= target_time:
@@ -381,13 +382,9 @@ def objective(trial):
 
     sim_state = run_simulation(sim_config)
 
-    warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.4
+    warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.5
 
-    queues = {
-        ItemType.IRON_INGOT.value: [],
-        ItemType.IRON_ROD.value: [],
-        ItemType.IRON_WIRE.value: []
-    }
+    queues = {item.value: [] for item in sim_config.nodes}
 
     for log in sim_state.queue_logs:
         if log.timestamp > warmup_cutoff:
@@ -395,7 +392,7 @@ def objective(trial):
 
     score = 0
 
-    for item in ItemType:
+    for item in sim_config.nodes:
         series = queues[item.value]
         capacity = sim_config.nodes[item].queue_size
         score += oscillation_score(series, capacity)
@@ -423,6 +420,98 @@ def oscillation_score(series, capacity):
 
     return (std_dev * crossings) - penalty
 
+# ==================================================================================================
+# Stability Analysis
+# ==================================================================================================
+
+def run_stability_experiment(sensitivities, delays):
+
+    stability_matrix = np.zeros((len(sensitivities), len(delays)))
+
+    best_score = float("inf")
+    best_params = None
+
+    for i, sensitivity in enumerate(sensitivities):
+        for j, delay in enumerate(delays):
+
+            sim_config = create_sim_config(sensitivity, delay)
+            sim_state = run_simulation(sim_config)
+
+            warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.5
+            queues = extract_queue_series(sim_config, sim_state, warmup_cutoff)
+
+            score = 0
+
+            for item in sim_config.nodes:
+                series = queues[item.value]
+                score += stability_metric(series)
+
+            stability_matrix[i, j] = score
+
+            if score < best_score:
+                best_score = score
+                best_params = (sensitivity, delay)
+
+    # ---- concise report ----
+
+    logging.info("\n--- Stability Experiment Finished ---")
+
+    logging.info(
+        f"Grid searched {len(sensitivities) * len(delays)} parameter combinations "
+        f"({len(sensitivities)} sensitivities × {len(delays)} delays)"
+    )
+
+    logging.info(
+        f"Most Stable Parameters: Sensitivity = {best_params[0]:.4f}, "
+        f"Delay = {best_params[1]:.2f}s"
+    )
+
+    logging.info(f"Stability Score: {best_score:.3f}")
+
+    plot_stability_heatmap(sensitivities, delays, stability_matrix)
+
+
+def extract_queue_series(sim_config, sim_state, warmup_cutoff):
+    queues = {item.value: [] for item in sim_config.nodes}
+
+    for log in sim_state.queue_logs:
+        if log.timestamp > warmup_cutoff:
+            queues[log.queue_name].append(log.queue_usage)
+
+    return queues
+
+def stability_metric(series):
+    """Measures whether the queue converges to equilibrium. Low values mean stable, high values mean oscillatory."""
+    if len(series) < 10:
+        return 0
+
+    std_dev = np.std(series)
+    drift = abs(series[-1] - series[0])
+
+    return std_dev + 0.5 * drift
+
+def plot_stability_heatmap(sensitivities, delays, matrix):
+
+    plt.figure(figsize=(8,6))
+
+    plt.imshow(
+        matrix,
+        origin='lower',
+        aspect='auto',
+        extent=[delays[0], delays[-1], sensitivities[0], sensitivities[-1]]
+    )
+
+    plt.colorbar(label="Instability Score")
+
+    plt.xlabel("Feedback Delay")
+    plt.ylabel("Reaction Sensitivity")
+    plt.title("Stability of Producer–Consumer System")
+
+    plt.show()
+
+# ==================================================================================================
+# Sim Config Population
+# ==================================================================================================
 
 def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> SimConfig:
     production_time = 1.0
@@ -432,12 +521,12 @@ def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> Sim
         use_feedback=True,
         nodes={
             ItemType.IRON_INGOT: NodeConfig(
-                queue_size=250,
+                queue_size=200,
                 producer=ProducerConfig(
                     count=1,
                     output=ItemType.IRON_INGOT,
                     production_time=production_time,
-                    target_queue_size=125,
+                    target_queue_size=100,
                     reaction_sensitivity=reaction_sensitivity,
                     feedback_delay=feedback_delay
                 ),
@@ -446,33 +535,33 @@ def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> Sim
                     input=ItemType.IRON_INGOT,
                     output=ItemType.IRON_ROD,
                     consumption_time=1.0,
-                    target_queue_size=125,
+                    target_queue_size=100,
                     reaction_sensitivity=reaction_sensitivity,
                     feedback_delay=feedback_delay
                 ),
             ),
 
             ItemType.IRON_ROD: NodeConfig(
-                queue_size=250,
+                queue_size=200,
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_ROD,
-                    output=ItemType.IRON_WIRE,
+                    # output=ItemType.IRON_WIRE,
                     consumption_time=1.0,
-                    target_queue_size=125,
-                    reaction_sensitivity=reaction_sensitivity,
-                    feedback_delay=feedback_delay
+                    # target_queue_size=100,
+                    # reaction_sensitivity=reaction_sensitivity,
+                    # feedback_delay=feedback_delay
                 ),
             ),
 
-            ItemType.IRON_WIRE: NodeConfig(
-                queue_size=250,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_WIRE,
-                    consumption_time=1.0
-                ),
-            ),
+            # ItemType.IRON_WIRE: NodeConfig(
+            #     queue_size=200,
+            #     consumer=ConsumerConfig(
+            #         count=1,
+            #         input=ItemType.IRON_WIRE,
+            #         consumption_time=1.0
+            #     ),
+            # ),
         }
     )
 
@@ -506,6 +595,13 @@ def run_optuna() -> None:
     log_results(best_sim_state)
     plot_results(best_sim_state)
 
+def run_stability_analysis():
+    sensitivities = np.linspace(0.01, 0.25, 25)
+    delays = np.linspace(1, 25, 25)
+
+    logging.info(f"Running {len(sensitivities) * len(delays)} stability experiments...")
+    run_stability_experiment(sensitivities, delays)
+
 def run_individual() -> None:
     sim_config = sim_scenarios.get_multiple_oscillations()
     sim_state = run_simulation(sim_config)
@@ -520,7 +616,9 @@ def run_individual() -> None:
 
 def main() -> None:
     """Main function for running the simulation."""
-    run_individual()
+    run_optuna()
+    run_stability_analysis()
+    # run_individual()
 
 if __name__ == '__main__':
     main()
