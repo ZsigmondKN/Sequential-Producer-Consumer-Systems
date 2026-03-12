@@ -377,55 +377,7 @@ def objective(trial):
     production_time = 1.0
     test_delay = trial.suggest_float('feedback_delay', production_time, production_time * 20)
 
-    sim_config = SimConfig(
-        simulation_timeout_in_seconds=500,
-        queue_interval=1.0,
-        use_feedback=True,
-        nodes={
-            ItemType.IRON_INGOT: NodeConfig(
-                queue_size=250,
-                producer=ProducerConfig(
-                    count=1,
-                    output=ItemType.IRON_INGOT,
-                    production_time=production_time,
-                    target_queue_size=125,
-                    reaction_sensitivity=test_sensitivity,
-                    feedback_delay=test_delay
-                ),
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_INGOT,
-                    output=ItemType.IRON_ROD,
-                    consumption_time=1.0,
-                    target_queue_size=125,
-                    reaction_sensitivity=test_sensitivity,
-                    feedback_delay=test_delay
-                ),
-            ),
-
-            ItemType.IRON_ROD: NodeConfig(
-                queue_size=250,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_ROD,
-                    output=ItemType.IRON_WIRE,
-                    consumption_time=1.0,
-                    target_queue_size=125,
-                    reaction_sensitivity=test_sensitivity,
-                    feedback_delay=test_delay
-                ),
-            ),
-
-            ItemType.IRON_WIRE: NodeConfig(
-                queue_size=250,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_WIRE,
-                    consumption_time=1.0
-                ),
-            ),
-        }
-    )
+    sim_config = create_sim_config(test_sensitivity, test_delay)
 
     sim_state = run_simulation(sim_config)
 
@@ -451,29 +403,78 @@ def objective(trial):
     return float(score)
 
 def oscillation_score(series, capacity):
-
     if len(series) < 10:
         return 0
-
+    
     std_dev = np.std(series)
-
     crossings = 0
     for i in range(2, len(series)):
         a, b, c = series[i-2], series[i-1], series[i]
         if (b > a and b > c) or (b < a and b < c):
             crossings += 1
-
     min_q = min(series)
     max_q = max(series)
-
     penalty = 0
+
     if min_q < 0.1 * capacity:
         penalty += (0.1 * capacity - min_q)
-
     if max_q > 0.9 * capacity:
         penalty += (max_q - 0.9 * capacity)
 
     return (std_dev * crossings) - penalty
+
+
+def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> SimConfig:
+    production_time = 1.0
+    return SimConfig(
+        simulation_timeout_in_seconds=500,
+        queue_interval=1.0,
+        use_feedback=True,
+        nodes={
+            ItemType.IRON_INGOT: NodeConfig(
+                queue_size=250,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=production_time,
+                    target_queue_size=125,
+                    reaction_sensitivity=reaction_sensitivity,
+                    feedback_delay=feedback_delay
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_ROD,
+                    consumption_time=1.0,
+                    target_queue_size=125,
+                    reaction_sensitivity=reaction_sensitivity,
+                    feedback_delay=feedback_delay
+                ),
+            ),
+
+            ItemType.IRON_ROD: NodeConfig(
+                queue_size=250,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
+                    consumption_time=1.0,
+                    target_queue_size=125,
+                    reaction_sensitivity=reaction_sensitivity,
+                    feedback_delay=feedback_delay
+                ),
+            ),
+
+            ItemType.IRON_WIRE: NodeConfig(
+                queue_size=250,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_WIRE,
+                    consumption_time=1.0
+                ),
+            ),
+        }
+    )
 
 # ==================================================================================================
 # Simulation Types
@@ -498,56 +499,7 @@ def run_optuna() -> None:
     logging.info(f"Winning Parameters: Sensitivity = {best_sensitivity:.4f}, Delay = {best_delay:.2f}s")
     logging.info("\nRunning final simulation with the best parameters to plot results...")
 
-    best_sim_config = SimConfig(
-        simulation_timeout_in_seconds=500,
-        queue_interval=1.0,
-        use_feedback=True,
-        nodes={
-            ItemType.IRON_INGOT: NodeConfig(
-                queue_size=250,
-                producer=ProducerConfig(
-                    count=1,
-                    output=ItemType.IRON_INGOT,
-                    production_time=1.0,
-                    target_queue_size=125,
-                    reaction_sensitivity=best_sensitivity,
-                    feedback_delay=best_delay
-                ),
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_INGOT,
-                    output=ItemType.IRON_ROD,
-                    consumption_time=1.0,
-                    target_queue_size=125,
-                    reaction_sensitivity=best_sensitivity,
-                    feedback_delay=best_delay
-                ),
-            ),
-
-            ItemType.IRON_ROD: NodeConfig(
-                queue_size=250,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_ROD,
-                    output=ItemType.IRON_WIRE,
-                    consumption_time=1.0,
-                    target_queue_size=125,
-                    reaction_sensitivity=best_sensitivity,
-                    feedback_delay=best_delay
-                ),
-            ),
-
-            ItemType.IRON_WIRE: NodeConfig(
-                queue_size=250,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_WIRE,
-                    consumption_time=1.0
-                ),
-            ),
-        }
-    )
-
+    best_sim_config = create_sim_config(best_sensitivity, best_delay)
     best_sim_state = run_simulation(best_sim_config)
 
     log_simulation_parameters(best_sim_config)
@@ -568,7 +520,7 @@ def run_individual() -> None:
 
 def main() -> None:
     """Main function for running the simulation."""
-    run_optuna()
+    run_individual()
 
 if __name__ == '__main__':
     main()
