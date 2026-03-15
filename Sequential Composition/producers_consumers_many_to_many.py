@@ -4,98 +4,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import optuna
 import optuna.visualization as vis
-from enum import Enum
 from collections import Counter
-from dataclasses import dataclass, field
 
 import sim_scenarios
+from sim_dataclasses import *
 
 # --------------------------------------------------------------------------------------------------
 # Running instructions 
 #   RUN - python producers_consumers_many_to_many.py
 # --------------------------------------------------------------------------------------------------
 
-# ==================================================================================================
-# Simulation data structures
-# ==================================================================================================
-
-class ItemType(Enum):
-    IRON_INGOT = "Iron Ingot"
-    IRON_ROD = "Iron Rod"
-    IRON_WIRE = "Iron Wire"
-
-@dataclass
-class SimulationState:
-    producer_logs: list
-    consumer_logs: list
-    queue_logs: list
-    queues: dict[ItemType, int]
-    queue_history: dict[ItemType, list[tuple[float, int]]]
-
-@dataclass
-class ProducerState:
-    process_id: int
-    item_type: ItemType
-    next_ready_time: float = 0.0
-
-
-@dataclass
-class ConsumerState:
-    process_id: int
-    item_type: ItemType
-    next_ready_time: float = 0.0
-
-@dataclass
-class SimulationLogs:
-    process_id: int
-    item_type: str
-    timestamp: float
-
-@dataclass
-class QueueLogs:
-    queue_name: str
-    queue_usage: int
-    timestamp: float
-
-@dataclass(frozen=True)
-class ProducerConfig:
-    count: int = 0
-    output: ItemType | None = None
-    production_time: float | None = None
-    # P-Control below
-    target_queue_size: int | None = None
-    reaction_sensitivity: float = 0.0
-    feedback_delay: float = 0.0
-
-@dataclass(frozen=True)
-class ConsumerConfig:
-    count: int = 0
-    input: ItemType | None = None
-    output: ItemType | None = None
-    consumption_time: float | None = None
-    # P-Control below
-    target_queue_size: int | None = None
-    reaction_sensitivity: float = 0.0
-    feedback_delay: float = 0.0
-
-@dataclass(frozen=True)
-class NodeConfig:
-    queue_size: int
-    producer: ProducerConfig = ProducerConfig()
-    consumer: ConsumerConfig = ConsumerConfig()
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(message)s", datefmt="%H:%M:%S")
-
-# ==================================================================================================
-# Simulation definition
-# ==================================================================================================
-
-@dataclass(frozen=True)
-class SimConfig:
-    simulation_timeout_in_seconds: int = 200
-    queue_interval: float = 1.0
-    use_feedback: bool = False
-    nodes: dict[ItemType, NodeConfig] = field(default_factory=dict)
 
 # ==================================================================================================
 # Main processes
@@ -116,16 +35,15 @@ def producer(state: ProducerState, simulation_state: SimulationState, sim_config
         return
     
     if sim_config.use_feedback:
-        next_production_time = calculate_adjusted_time(
-            base_production_time, node.producer.target_queue_size, node.producer.reaction_sensitivity, 
-            node.producer.feedback_delay, simulation_state.queue_history[output_type], sim_time)
+        next_production_time = compute_feedback_time(base_production_time, node.producer.target_queue_size,
+            node.producer.reaction_sensitivity, node.producer.feedback_delay, sim_config, simulation_state,
+            None, output_type, sim_time)
     else:
         next_production_time = base_production_time
 
-    simulation_state.queues[output_type] += 1
-    simulation_state.queue_history[output_type].append((sim_time, simulation_state.queues[output_type]))
-    simulation_state.producer_logs.append(SimulationLogs(state.process_id, state.item_type.value, sim_time))
-    state.next_ready_time = sim_time + next_production_time
+    finish_time = sim_time + next_production_time
+    simulation_state.pending_outputs.append((finish_time, output_type))
+    state.next_ready_time = finish_time
 
 def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config: SimConfig, sim_time: float) -> None:
     """Run a consumer process that retrieves and processes items from the provided queue."""
@@ -143,24 +61,24 @@ def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config
         if simulation_state.queues[output_type] >= sim_config.nodes[output_type].queue_size:
             return
         
-    if output_type is None or sim_config.use_feedback is False:
-        consumption_time = 1.0 + np.random.normal(0, 0.5)
-        adjusted_consumption_time = consumption_time
+    if sim_config.use_feedback:
+        adjusted_consumption_time = compute_feedback_time(consumption_time, node.consumer.target_queue_size,
+            node.consumer.reaction_sensitivity, node.consumer.feedback_delay, sim_config, simulation_state,
+            input_type, output_type, sim_time)
     else:
-        adjusted_consumption_time = calculate_adjusted_time(
-            consumption_time, node.consumer.target_queue_size, node.consumer.reaction_sensitivity,
-            node.consumer.feedback_delay, simulation_state.queue_history[output_type], sim_time)
+        adjusted_consumption_time = consumption_time
 
+    # consume immediately
     simulation_state.queues[input_type] -= 1
     simulation_state.queue_history[input_type].append((sim_time, simulation_state.queues[input_type]))
     simulation_state.consumer_logs.append(SimulationLogs(state.process_id, state.item_type.value, sim_time))
 
-    if output_type is not None:
-        simulation_state.queues[output_type] += 1
-        simulation_state.queue_history[output_type].append((sim_time, simulation_state.queues[output_type]))
-        simulation_state.producer_logs.append(SimulationLogs(state.process_id, output_type.value, sim_time))
-
+    # schedule output after processing time
     state.next_ready_time = sim_time + adjusted_consumption_time
+
+    if output_type is not None:
+        # output will appear when the process finishes
+        simulation_state.pending_outputs.append((state.next_ready_time, output_type))
 
 def get_delayed_queue_size(history: list[tuple[float, int]], current_time: float, delay: float) -> int:
     """Returns the size of the queue exactly 'delay' seconds ago."""
@@ -188,6 +106,37 @@ def calculate_adjusted_time(base_time: float, target_queue_size: int, reaction_s
     time_multiplier = math.exp(-math.atan(control_signal))
     
     return base_time * time_multiplier
+
+def compute_feedback_time(base_time, target, sensitivity, delay, sim_config, simulation_state, 
+    input_type, output_type, sim_time):
+
+    if target is None:
+        return base_time
+
+    if sim_config.feedback_type == FeedbackType.OUTPUT:
+        if output_type is None:
+            return base_time
+
+        queue_history = simulation_state.queue_history[output_type]
+        return calculate_adjusted_time(base_time, target, sensitivity, delay, queue_history, sim_time)
+
+    elif sim_config.feedback_type == FeedbackType.INPUT:
+        if input_type is None:
+            return base_time
+        queue_history = simulation_state.queue_history[input_type]
+        return calculate_adjusted_time(base_time, target, sensitivity, delay, queue_history, sim_time)
+
+    elif sim_config.feedback_type == FeedbackType.DUAL:
+        if input_type is None or output_type is None:
+                return base_time
+
+        input_hist = simulation_state.queue_history[input_type]
+        output_hist = simulation_state.queue_history[output_type]
+        input_time = calculate_adjusted_time(base_time, target, sensitivity, delay, input_hist, sim_time)
+        output_time = calculate_adjusted_time(base_time, target, sensitivity, delay, output_hist, sim_time)
+
+        return min(input_time, output_time)
+
 # ==================================================================================================
 # Reporting - logs and diagrams
 # ==================================================================================================
@@ -319,7 +268,8 @@ def create_simulation_state(sim_config: SimConfig) -> SimulationState:
         consumer_logs=[],
         queue_logs=[],
         queues=queues,
-        queue_history=queue_history
+        queue_history=queue_history,
+        pending_outputs=[]
     )
 
 def create_producer_consumer_states(sim_config: SimConfig) -> tuple[list[ProducerState], list[ConsumerState]]:
@@ -354,7 +304,22 @@ def run_simulation(sim_config: SimConfig) -> SimulationState:
                 else:
                     consumer(state, simulation_state, sim_config, sim_time)
 
-        next_event_time = min((p.next_ready_time for p in processes if p.next_ready_time > sim_time), default=None)
+        # apply pending outputs whose time has arrived
+        ready_outputs = [p for p in simulation_state.pending_outputs if p[0] <= sim_time]
+
+        for timestamp, item in ready_outputs:
+            simulation_state.queues[item] += 1
+            simulation_state.queue_history[item].append((timestamp, simulation_state.queues[item]))
+            simulation_state.producer_logs.append(SimulationLogs(-1, item.value, timestamp))
+
+        simulation_state.pending_outputs = [p for p in simulation_state.pending_outputs if p[0] > sim_time]
+
+        process_times = [p.next_ready_time for p in processes if p.next_ready_time > sim_time]
+        output_times = [t for t, _ in simulation_state.pending_outputs if t > sim_time]
+
+        all_times = process_times + output_times
+
+        next_event_time = min(all_times) if all_times else None
         if next_event_time is None or next_event_time > duration:
             break
 
@@ -373,17 +338,18 @@ def run_simulation(sim_config: SimConfig) -> SimulationState:
 
 def objective(trial):
 
-    test_sensitivity = trial.suggest_float('reaction_sensitivity', 0.01, 0.2)
+    # The higher the value, the more sharp the turns are on the lines, 
+    # if above a threashold, it over reacts resulting in oscillations, if below threashols it stabilises
+    test_sensitivity = trial.suggest_float('reaction_sensitivity', 0.01, 0.1)
 
     production_time = 1.0
+    # The higer the value, the more it can diverge from the target, it too high results are spreatic
     test_delay = trial.suggest_float('feedback_delay', production_time, production_time * 20)
 
     sim_config = create_sim_config(test_sensitivity, test_delay)
-
     sim_state = run_simulation(sim_config)
 
     warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.5
-
     queues = {item.value: [] for item in sim_config.nodes}
 
     for log in sim_state.queue_logs:
@@ -391,7 +357,6 @@ def objective(trial):
             queues[log.queue_name].append(log.queue_usage)
 
     score = 0
-
     for item in sim_config.nodes:
         series = queues[item.value]
         capacity = sim_config.nodes[item].queue_size
@@ -431,6 +396,13 @@ def run_stability_experiment(sensitivities, delays):
     best_score = float("inf")
     best_params = None
 
+    def extract_queue_series(sim_config, sim_state, warmup_cutoff):
+        queues = {item.value: [] for item in sim_config.nodes}
+        for log in sim_state.queue_logs:
+            if log.timestamp > warmup_cutoff:
+                queues[log.queue_name].append(log.queue_usage)
+        return queues
+
     for i, sensitivity in enumerate(sensitivities):
         for j, delay in enumerate(delays):
 
@@ -452,55 +424,34 @@ def run_stability_experiment(sensitivities, delays):
                 best_score = score
                 best_params = (sensitivity, delay)
 
-    # ---- concise report ----
-
     logging.info("\n--- Stability Experiment Finished ---")
-
     logging.info(
         f"Grid searched {len(sensitivities) * len(delays)} parameter combinations "
-        f"({len(sensitivities)} sensitivities × {len(delays)} delays)"
-    )
-
+        f"({len(sensitivities)} sensitivities × {len(delays)} delays)")
     logging.info(
         f"Most Stable Parameters: Sensitivity = {best_params[0]:.4f}, "
-        f"Delay = {best_params[1]:.2f}s"
-    )
-
+        f"Delay = {best_params[1]:.2f}s")
     logging.info(f"Stability Score: {best_score:.3f}")
 
     plot_stability_heatmap(sensitivities, delays, stability_matrix)
-
-
-def extract_queue_series(sim_config, sim_state, warmup_cutoff):
-    queues = {item.value: [] for item in sim_config.nodes}
-
-    for log in sim_state.queue_logs:
-        if log.timestamp > warmup_cutoff:
-            queues[log.queue_name].append(log.queue_usage)
-
-    return queues
 
 def stability_metric(series):
     """Measures whether the queue converges to equilibrium. Low values mean stable, high values mean oscillatory."""
     if len(series) < 10:
         return 0
-
     std_dev = np.std(series)
     drift = abs(series[-1] - series[0])
 
     return std_dev + 0.5 * drift
 
 def plot_stability_heatmap(sensitivities, delays, matrix):
-
     plt.figure(figsize=(8,6))
-
     plt.imshow(
         matrix,
         origin='lower',
         aspect='auto',
         extent=[delays[0], delays[-1], sensitivities[0], sensitivities[-1]]
     )
-
     plt.colorbar(label="Instability Score")
 
     plt.xlabel("Feedback Delay")
@@ -508,62 +459,6 @@ def plot_stability_heatmap(sensitivities, delays, matrix):
     plt.title("Stability of Producer–Consumer System")
 
     plt.show()
-
-# ==================================================================================================
-# Sim Config Population
-# ==================================================================================================
-
-def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> SimConfig:
-    production_time = 1.0
-    return SimConfig(
-        simulation_timeout_in_seconds=500,
-        queue_interval=1.0,
-        use_feedback=True,
-        nodes={
-            ItemType.IRON_INGOT: NodeConfig(
-                queue_size=200,
-                producer=ProducerConfig(
-                    count=1,
-                    output=ItemType.IRON_INGOT,
-                    production_time=production_time,
-                    target_queue_size=100,
-                    reaction_sensitivity=reaction_sensitivity,
-                    feedback_delay=feedback_delay
-                ),
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_INGOT,
-                    output=ItemType.IRON_ROD,
-                    consumption_time=1.0,
-                    target_queue_size=100,
-                    reaction_sensitivity=reaction_sensitivity,
-                    feedback_delay=feedback_delay
-                ),
-            ),
-
-            ItemType.IRON_ROD: NodeConfig(
-                queue_size=200,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_ROD,
-                    # output=ItemType.IRON_WIRE,
-                    consumption_time=1.0,
-                    # target_queue_size=100,
-                    # reaction_sensitivity=reaction_sensitivity,
-                    # feedback_delay=feedback_delay
-                ),
-            ),
-
-            # ItemType.IRON_WIRE: NodeConfig(
-            #     queue_size=200,
-            #     consumer=ConsumerConfig(
-            #         count=1,
-            #         input=ItemType.IRON_WIRE,
-            #         consumption_time=1.0
-            #     ),
-            # ),
-        }
-    )
 
 # ==================================================================================================
 # Simulation Types
@@ -596,19 +491,76 @@ def run_optuna() -> None:
     plot_results(best_sim_state)
 
 def run_stability_analysis():
-    sensitivities = np.linspace(0.01, 0.25, 25)
-    delays = np.linspace(1, 25, 25)
+    sensitivities = np.linspace(0.01, 5, 25)
+    delays = np.linspace(1, 100, 25)
 
     logging.info(f"Running {len(sensitivities) * len(delays)} stability experiments...")
     run_stability_experiment(sensitivities, delays)
 
-def run_individual() -> None:
-    sim_config = sim_scenarios.get_multiple_oscillations()
+def run_individual(sim_config: SimConfig) -> None:
     sim_state = run_simulation(sim_config)
-
     log_simulation_parameters(sim_config)
     log_results(sim_state)
     plot_results(sim_state)
+
+# ==================================================================================================
+# Sim Config Population
+# ==================================================================================================
+
+def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> SimConfig:
+    return SimConfig(
+        simulation_timeout_in_seconds=800,
+        queue_interval=1.0,
+        use_feedback=True,
+        feedback_type = FeedbackType.DUAL,
+        nodes={
+            ItemType.IRON_INGOT: NodeConfig(
+                queue_size=100,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=0.5,
+                    target_queue_size=50,
+                    reaction_sensitivity=reaction_sensitivity,
+                    feedback_delay=feedback_delay
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_ROD,
+                    consumption_time=0.5,
+                    target_queue_size=50,
+                    reaction_sensitivity=reaction_sensitivity,
+                    feedback_delay=feedback_delay
+                ),
+            ),
+
+            ItemType.IRON_ROD: NodeConfig(
+                queue_size=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
+                    consumption_time=1.0,
+                    target_queue_size=50,
+                    reaction_sensitivity=reaction_sensitivity,
+                    feedback_delay=feedback_delay
+                ),
+            ),
+
+            ItemType.IRON_WIRE: NodeConfig(
+                queue_size=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_WIRE,
+                    consumption_time=1.0,
+                    target_queue_size=50,
+                    reaction_sensitivity=reaction_sensitivity,
+                    feedback_delay=feedback_delay
+                ),
+            ),
+        }
+    )
 
 # ==================================================================================================
 # Main function
@@ -616,9 +568,20 @@ def run_individual() -> None:
 
 def main() -> None:
     """Main function for running the simulation."""
-    run_optuna()
-    run_stability_analysis()
-    # run_individual()
+
+    # ======== Experiments ========
+    # run_optuna()
+    # run_stability_analysis()
+
+    # ======== Individual Scenarios ========
+    sim_config, stability_config = sim_scenarios.get_multiple_oscillations_dual_f()
+    run_individual(sim_config)
+
+    # # MANUALLY UPDATE SENSITIVITY ARCHITECTURE
+    # stability_exp_sensitivities = stability_config["sensitivities"]
+    # stability_exp_delays = stability_config["delays"]
+    # logging.info(f"Running {len(stability_exp_sensitivities) * len(stability_exp_delays)} stability experiments...")
+    # run_stability_experiment(stability_exp_sensitivities, stability_exp_delays)
 
 if __name__ == '__main__':
     main()
