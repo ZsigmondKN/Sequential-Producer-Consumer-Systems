@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import optuna
 import optuna.visualization as vis
 from collections import Counter
+from dataclasses import replace
 
 import sim_scenarios
 from sim_dataclasses import *
@@ -389,8 +390,39 @@ def oscillation_score(series, capacity):
 # Stability Analysis
 # ==================================================================================================
 
-def run_stability_experiment(sensitivities, delays):
+def apply_feedback_params(sim_config: SimConfig, sensitivity: float, delay: float):
+    """Return a new SimConfig with updated sensitivity and delay."""
+    
+    new_nodes = {}
 
+    for item_type, node in sim_config.nodes.items():
+
+        producer = node.producer
+        consumer = node.consumer
+
+        if producer and producer.target_queue_size is not None:
+            producer = replace(
+                producer,
+                reaction_sensitivity=sensitivity,
+                feedback_delay=delay
+            )
+
+        if consumer and consumer.target_queue_size is not None:
+            consumer = replace(
+                consumer,
+                reaction_sensitivity=sensitivity,
+                feedback_delay=delay
+            )
+
+        new_nodes[item_type] = replace(
+            node,
+            producer=producer,
+            consumer=consumer
+        )
+
+    return replace(sim_config, nodes=new_nodes)
+
+def run_stability_experiment(base_config: SimConfig, sensitivities, delays):
     stability_matrix = np.zeros((len(sensitivities), len(delays)))
 
     best_score = float("inf")
@@ -406,7 +438,8 @@ def run_stability_experiment(sensitivities, delays):
     for i, sensitivity in enumerate(sensitivities):
         for j, delay in enumerate(delays):
 
-            sim_config = create_sim_config(sensitivity, delay)
+            sim_config = apply_feedback_params(base_config, sensitivity, delay)
+
             sim_state = run_simulation(sim_config)
 
             warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.5
@@ -433,7 +466,7 @@ def run_stability_experiment(sensitivities, delays):
         f"Delay = {best_params[1]:.2f}s")
     logging.info(f"Stability Score: {best_score:.3f}")
 
-    plot_stability_heatmap(sensitivities, delays, stability_matrix)
+    plot_stability_heatmap(sensitivities, delays, stability_matrix, base_config.feedback_type)
 
 def stability_metric(series):
     """Measures whether the queue converges to equilibrium. Low values mean stable, high values mean oscillatory."""
@@ -444,7 +477,7 @@ def stability_metric(series):
 
     return std_dev + 0.5 * drift
 
-def plot_stability_heatmap(sensitivities, delays, matrix):
+def plot_stability_heatmap(sensitivities, delays, matrix, feedback_type):
     plt.figure(figsize=(8,6))
     plt.imshow(
         matrix,
@@ -456,7 +489,7 @@ def plot_stability_heatmap(sensitivities, delays, matrix):
 
     plt.xlabel("Feedback Delay")
     plt.ylabel("Reaction Sensitivity")
-    plt.title("Stability of Producer–Consumer System")
+    plt.title(f"System Stability – {feedback_type.name.title()} Feedback")
 
     plt.show()
 
@@ -491,11 +524,14 @@ def run_optuna() -> None:
     plot_results(best_sim_state)
 
 def run_stability_analysis():
+
     sensitivities = np.linspace(0.01, 5, 25)
     delays = np.linspace(1, 100, 25)
 
+    base_config = create_sim_config(0.05, 10)
+
     logging.info(f"Running {len(sensitivities) * len(delays)} stability experiments...")
-    run_stability_experiment(sensitivities, delays)
+    run_stability_experiment(base_config, sensitivities, delays)
 
 def run_individual(sim_config: SimConfig) -> None:
     sim_state = run_simulation(sim_config)
@@ -574,14 +610,25 @@ def main() -> None:
     # run_stability_analysis()
 
     # ======== Individual Scenarios ========
-    sim_config, stability_config = sim_scenarios.get_multiple_oscillations_dual_f()
-    run_individual(sim_config)
+    for scenario in [
+        sim_scenarios.get_multiple_oscillations_input_f,
+        sim_scenarios.get_multiple_oscillations_output_f,
+        sim_scenarios.get_multiple_oscillations_dual_f,
+    ]:
 
-    # # MANUALLY UPDATE SENSITIVITY ARCHITECTURE
-    # stability_exp_sensitivities = stability_config["sensitivities"]
-    # stability_exp_delays = stability_config["delays"]
-    # logging.info(f"Running {len(stability_exp_sensitivities) * len(stability_exp_delays)} stability experiments...")
-    # run_stability_experiment(stability_exp_sensitivities, stability_exp_delays)
+        sim_config, stability_config = scenario()
+
+        run_individual(sim_config)
+
+        logging.info(
+            f"Running {len(stability_config['sensitivities']) * len(stability_config['delays'])} stability experiments..."
+        )
+
+        run_stability_experiment(
+            sim_config,
+            stability_config["sensitivities"],
+            stability_config["delays"]
+        )
 
 if __name__ == '__main__':
     main()
