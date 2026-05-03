@@ -155,7 +155,7 @@ def get_backpressure_propagation() -> tuple[SimConfig, None]:
     )
     return sim_config, stability_config
 
-def get_second_order_sim_no_delay_output_feedback() -> tuple[SimConfig, dict]:
+def get_second_order_sim_no_transport_lag_output_feedback() -> tuple[SimConfig, dict]:
     """Configuration extracted from the optimized run producing stable oscillations."""
 
     stability_config = {
@@ -183,6 +183,7 @@ def get_second_order_sim_no_delay_output_feedback() -> tuple[SimConfig, dict]:
                     production_time=1.0,
                     reference_signal=50,
                     proportional_gain=1.0,
+                    integral_gain=0.1,
                 ),
                 consumer=ConsumerConfig(
                     count=1,
@@ -191,6 +192,7 @@ def get_second_order_sim_no_delay_output_feedback() -> tuple[SimConfig, dict]:
                     consumption_time=1.0,
                     reference_signal=50,
                     proportional_gain=1.0,
+                    integral_gain=0.1,
                 ),
             ),
             ItemType.IRON_ROD: ProcessConfig(
@@ -200,7 +202,8 @@ def get_second_order_sim_no_delay_output_feedback() -> tuple[SimConfig, dict]:
                     input=ItemType.IRON_ROD, 
                     consumption_time=1.0, 
                     reference_signal=50, 
-                    proportional_gain=1.0, 
+                    proportional_gain=1.0,
+                    integral_gain=0.1
                 ),
             ),
         }

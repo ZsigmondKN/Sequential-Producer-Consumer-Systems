@@ -42,6 +42,10 @@ def producer(state: ProducerState, simulation_state: SimulationState, sim_config
     else:
         next_production_time = base_production_time
 
+    simulation_state.producer_logs.append(
+        SimulationLogs(state.process_id, state.item_type.value, sim_time)
+    )
+
     finish_time = sim_time + next_production_time
     simulation_state.pending_outputs.append((finish_time, output_type))
     state.next_ready_time = finish_time
@@ -88,24 +92,23 @@ def get_queue_occupancy(history: list[tuple[float, int]], current_time: float, d
     """Returns the occupancy of the queue exactly 'delay' seconds ago."""
     target_time = current_time - delay
     # Assume empty before the delay period has passed
-    if target_time <= 0.0:
-        return history[0][1]
+    if target_time <= history[0][0]:
+        return 0
     
     for timestamp, occupancy in reversed(history):
         if timestamp <= target_time:
             return occupancy
     return 0
 
-def calculate_control_effort(base_time: float, reference_signal: int, proportional_gain: float, 
+def compute_actuation_time(base_time: float, reference_signal: int, proportional_gain: float, 
     transport_lag: float, queue_history: list[tuple[float, int]], sim_time: float, current_queue: int,
     integral_gain: float, state: ProducerState | ConsumerState, last_time: float, override_error=None) -> float:
-    """Calculates the adjusted processing time using decoupled PI feedback and Dead-Time."""
+    """ Compute the actuation command (processing time) using a PI controller."""
     
     # 1. HANDLE DELAY INDEPENDENTLY
     if override_error is not None:
         control_error = override_error
     else:
-        # Check if Feedback Delay (Dead-Time) is enabled
         if transport_lag is None or transport_lag <= 0:
             queue_value = current_queue
         else:
@@ -113,24 +116,31 @@ def calculate_control_effort(base_time: float, reference_signal: int, proportion
 
         control_error = reference_signal - queue_value
 
-    dt = min(max(sim_time - last_time, 1e-6), 1.0)
+    dt = max(sim_time - last_time, 1e-6)
 
     # 2. HANDLE INTEGRAL (PI) INDEPENDENTLY
     if integral_gain > 0:
         # PI Control: Accumulate error over time
         state.error_integral += control_error * dt
-        control_variable = (proportional_gain * control_error) + (integral_gain * state.error_integral)
     else:
         # Pure P Control: Reset integral to prevent stale data buildup, only use proportional
         state.error_integral = 0.0
-        control_variable = proportional_gain * control_error
 
     state.last_update_time = sim_time
 
-    # Apply the bounded duration multiplier (actuation)
-    time_multiplier = math.exp(-math.atan(control_variable))
+    u = (
+        proportional_gain * control_error +
+        integral_gain * state.error_integral
+    )
     
-    return base_time * time_multiplier
+    EPS = 1e-6  # just to avoid division by zero
+
+    denominator = 1 + u
+
+    if denominator <= EPS:
+        return float('inf')  # machine effectively stalls
+
+    return base_time / denominator
 
 def compute_feedback_time(base_time, target, sensitivity, delay, sim_config, simulation_state, 
     input_type, output_type, sim_time, state, damping, last_update_time):
@@ -145,7 +155,7 @@ def compute_feedback_time(base_time, target, sensitivity, delay, sim_config, sim
         queue_history = simulation_state.queue_history[output_type]
         current_queue = simulation_state.queues[output_type]
 
-        return calculate_control_effort(
+        return compute_actuation_time(
             base_time, target, sensitivity, delay, queue_history, sim_time, current_queue, damping, state, last_update_time)
 
     elif sim_config.feedback_type == FeedbackType.INPUT:
@@ -153,23 +163,45 @@ def compute_feedback_time(base_time, target, sensitivity, delay, sim_config, sim
             return base_time
         queue_history = simulation_state.queue_history[input_type]
         current_queue = simulation_state.queues[input_type]
-        return calculate_control_effort(base_time, target, sensitivity, delay, queue_history, sim_time, current_queue, damping, state, last_update_time)
+        return compute_actuation_time(base_time, target, sensitivity, delay, queue_history, sim_time, current_queue, damping, state, last_update_time)
 
     elif sim_config.feedback_type == FeedbackType.DUAL:
         if input_type is None or output_type is None:
             return base_time
+        
+        if delay is None or delay <= 0:
+            input_q = simulation_state.queues[input_type]
+            output_q = simulation_state.queues[output_type]
+        else:
+            input_q = get_queue_occupancy(
+                simulation_state.queue_history[input_type],
+                sim_time,
+                delay
+            )
+            output_q = get_queue_occupancy(
+                simulation_state.queue_history[output_type],
+                sim_time,
+                delay
+            )
 
-        input_q = simulation_state.queues[input_type]
-        output_q = simulation_state.queues[output_type]
-
-        # simplest: average error
+        # average error
         combined_error = (
             (target - input_q) +
             (target - output_q)
         ) * 0.5
-
-        return calculate_control_effort(
-            base_time, target, sensitivity, delay, None, sim_time, None, damping, state, last_update_time, combined_error
+    
+        return compute_actuation_time(
+            base_time,
+            target,
+            sensitivity,
+            delay,
+            None,
+            sim_time,
+            None,
+            damping,
+            state,
+            last_update_time,
+            override_error=combined_error
         )
 
 # ==================================================================================================
@@ -346,7 +378,6 @@ def run_simulation(sim_config: SimConfig, shocks=None) -> SimulationState:
         for timestamp, item in ready_outputs:
             simulation_state.queues[item] += 1
             simulation_state.queue_history[item].append((timestamp, simulation_state.queues[item]))
-            simulation_state.producer_logs.append(SimulationLogs(-1, item.value, timestamp))
 
         simulation_state.pending_outputs = [p for p in simulation_state.pending_outputs if p[0] > sim_time]
 
@@ -805,11 +836,11 @@ def main() -> None:
         # sim_scenarios.get_multiple_oscillations_input_f,
         # sim_scenarios.get_multiple_oscillations_output_f,
         # sim_scenarios.get_multiple_oscillations_dual_f,
-        sim_scenarios.get_second_order_sim_no_delay_output_feedback,
+        sim_scenarios.get_second_order_sim_no_transport_lag_output_feedback,
         # sim_scenarios.get_balanced_flow,
         # sim_scenarios.get_bottleneck,
         # sim_scenarios.get_starvation,
-        # sim_scenarios.get_backpressure_propagation,
+        sim_scenarios.get_backpressure_propagation,
     ]:
 
         sim_config, stability_config = scenario()
