@@ -155,22 +155,10 @@ def get_backpressure_propagation() -> tuple[SimConfig, None]:
     )
     return sim_config, stability_config
 
-def get_second_order_sim_no_transport_lag_output_feedback() -> tuple[SimConfig, dict]:
-    """Configuration extracted from the optimized run producing stable oscillations."""
-
-    stability_config = {
-        "mode": "split",
-        "x_param": "IRON_INGOT_producer_sensitivity",
-        "y_param": "IRON_INGOT_consumer_sensitivity",
-        "fixed_params": {
-            "IRON_ROD_consumer_sensitivity": 1.0
-        },
-        "x_values": np.linspace(0.01, 5, 25),
-        "y_values": np.linspace(0.01, 5, 25)
-    }
-
+def get_atomic_second_order_system() -> tuple[SimConfig, dict]:
+    stability_config = None
     sim_config = SimConfig(
-        simulation_timeout_in_seconds=500,
+        simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
         feedback_type = FeedbackType.OUTPUT,
@@ -182,17 +170,46 @@ def get_second_order_sim_no_transport_lag_output_feedback() -> tuple[SimConfig, 
                     output=ItemType.IRON_INGOT,
                     production_time=1.0,
                     reference_signal=50,
-                    proportional_gain=1.0,
-                    integral_gain=0.1,
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    consumption_time=1.0,
+                ),
+            ),
+        }
+    )
+
+    return sim_config, stability_config
+
+def get_sequential_higher_order_system_three_processes() -> tuple[SimConfig, dict]:
+    stability_config = None
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=1000,
+        queue_interval=1.0,
+        use_feedback=True,
+        feedback_type = FeedbackType.OUTPUT,
+        processes={
+            ItemType.IRON_INGOT: ProcessConfig(
+                queue_capacity=100,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
                 ),
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_INGOT,
                     output=ItemType.IRON_ROD,
                     consumption_time=1.0,
-                    reference_signal=50,
-                    proportional_gain=1.0,
-                    integral_gain=0.1,
+                    reference_signal=50, 
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
                 ),
             ),
             ItemType.IRON_ROD: ProcessConfig(
@@ -201,9 +218,130 @@ def get_second_order_sim_no_transport_lag_output_feedback() -> tuple[SimConfig, 
                     count=1, 
                     input=ItemType.IRON_ROD, 
                     consumption_time=1.0, 
+                ),
+            ),
+        }
+    )
+
+    return sim_config, stability_config
+
+def get_sequential_higher_order_system_four_processes() -> tuple[SimConfig, dict]:
+    stability_config = None
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=1000,
+        queue_interval=1.0,
+        use_feedback=True,
+        feedback_type = FeedbackType.OUTPUT,
+        processes={
+            ItemType.IRON_INGOT: ProcessConfig(
+                queue_capacity=100,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_ROD,
+                    consumption_time=1.0,
                     reference_signal=50, 
-                    proportional_gain=1.0,
-                    integral_gain=0.1
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
+                ),
+            ),
+            ItemType.IRON_ROD: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
+                ),
+            ),
+            ItemType.IRON_WIRE: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_WIRE,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
+                ),
+            ),
+        }
+    )
+
+    return sim_config, stability_config
+
+def get_sequential_higher_order_system_five_processes() -> tuple[SimConfig, dict]:
+    stability_config = None
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=1000,
+        queue_interval=1.0,
+        use_feedback=True,
+        feedback_type = FeedbackType.OUTPUT,
+        processes={
+            ItemType.IRON_INGOT: ProcessConfig(
+                queue_capacity=100,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_ROD,
+                    consumption_time=1.0,
+                    reference_signal=50, 
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
+                ),
+            ),
+            ItemType.IRON_ROD: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
+                ),
+            ),
+            ItemType.IRON_WIRE: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_WIRE,
+                    output=ItemType.IRON_MESH,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
+                ),
+            ),
+            ItemType.IRON_MESH: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_MESH,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=0.1,
+                    integral_gain=0.02,
                 ),
             ),
         }
