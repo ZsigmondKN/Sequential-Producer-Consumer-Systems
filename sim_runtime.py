@@ -36,9 +36,9 @@ def producer(state: ProducerState, simulation_state: SimulationState, sim_config
         return
     
     if sim_config.use_feedback:
-        next_production_time = compute_feedback_time(base_production_time, process.producer.target_queue_occupancy,
-            process.producer.reaction_sensitivity, process.producer.feedback_delay, sim_config, simulation_state,
-            None, output_type, sim_time, state, 0.1, state.last_update_time)
+        next_production_time = compute_feedback_time(base_production_time, process.producer.reference_signal,
+            process.producer.proportional_gain, process.producer.transport_lag, sim_config, simulation_state,
+            None, output_type, sim_time, state, process.producer.integral_gain, state.last_update_time)
     else:
         next_production_time = base_production_time
 
@@ -66,9 +66,9 @@ def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config
             return
         
     if sim_config.use_feedback:
-        adjusted_consumption_time = compute_feedback_time(consumption_time, process.consumer.target_queue_occupancy,
-            process.consumer.reaction_sensitivity, process.consumer.feedback_delay, sim_config, simulation_state,
-            input_type, output_type, sim_time, state, 0.1, state.last_update_time)
+        adjusted_consumption_time = compute_feedback_time(consumption_time, process.consumer.reference_signal,
+            process.consumer.proportional_gain, process.consumer.transport_lag, sim_config, simulation_state,
+            input_type, output_type, sim_time, state, process.consumer.integral_gain, state.last_update_time)
     else:
         adjusted_consumption_time = consumption_time
 
@@ -96,40 +96,39 @@ def get_queue_occupancy(history: list[tuple[float, int]], current_time: float, d
             return occupancy
     return 0
 
-def update_control_with_inertia(state, error, sensitivity, damping, dt):
-    # acceleration = proportional force - damping
-    accel = sensitivity * error - damping * state.control_velocity
+def calculate_control_effort(base_time: float, reference_signal: int, proportional_gain: float, 
+    transport_lag: float, queue_history: list[tuple[float, int]], sim_time: float, current_queue: int,
+    integral_gain: float, state: ProducerState | ConsumerState, last_time: float, override_error=None) -> float:
+    """Calculates the adjusted processing time using decoupled PI feedback and Dead-Time."""
     
-    # integrate velocity
-    state.control_velocity += accel * dt
-    
-    return state.control_velocity
-
-def calculate_adjusted_time(base_time: float, target_queue_occupancy: int, reaction_sensitivity: float, 
-    feedback_delay: float, queue_history: list[tuple[float, int]], sim_time: float, current_queue: int,
-    damping, state: ProducerState | ConsumerState, last_time: float, override_error=None) -> float:
-    """Calculates the adjusted processing time using a smooth bounded S-curve."""
+    # 1. HANDLE DELAY INDEPENDENTLY
     if override_error is not None:
-        dif_from_target = override_error
+        control_error = override_error
     else:
-        if feedback_delay is None or feedback_delay <= 0:
+        # Check if Feedback Delay (Dead-Time) is enabled
+        if transport_lag is None or transport_lag <= 0:
             queue_value = current_queue
         else:
-            queue_value = get_queue_occupancy(queue_history, sim_time, feedback_delay)
+            queue_value = get_queue_occupancy(queue_history, sim_time, transport_lag)
 
-        dif_from_target = target_queue_occupancy - queue_value
+        control_error = reference_signal - queue_value
 
     dt = min(max(sim_time - last_time, 1e-6), 1.0)
 
-    v = update_control_with_inertia(state, dif_from_target, reaction_sensitivity, damping, dt)
+    # 2. HANDLE INTEGRAL (PI) INDEPENDENTLY
+    if integral_gain > 0:
+        # PI Control: Accumulate error over time
+        state.error_integral += control_error * dt
+        control_variable = (proportional_gain * control_error) + (integral_gain * state.error_integral)
+    else:
+        # Pure P Control: Reset integral to prevent stale data buildup, only use proportional
+        state.error_integral = 0.0
+        control_variable = proportional_gain * control_error
 
     state.last_update_time = sim_time
 
-    # Calculate the raw control signal
-    # control_signal = reaction_sensitivity * dif_from_target
-    
-    # This represents an inertial P contorller 
-    time_multiplier = math.exp(-math.atan(v))
+    # Apply the bounded duration multiplier (actuation)
+    time_multiplier = math.exp(-math.atan(control_variable))
     
     return base_time * time_multiplier
 
@@ -146,7 +145,7 @@ def compute_feedback_time(base_time, target, sensitivity, delay, sim_config, sim
         queue_history = simulation_state.queue_history[output_type]
         current_queue = simulation_state.queues[output_type]
 
-        return calculate_adjusted_time(
+        return calculate_control_effort(
             base_time, target, sensitivity, delay, queue_history, sim_time, current_queue, damping, state, last_update_time)
 
     elif sim_config.feedback_type == FeedbackType.INPUT:
@@ -154,7 +153,7 @@ def compute_feedback_time(base_time, target, sensitivity, delay, sim_config, sim
             return base_time
         queue_history = simulation_state.queue_history[input_type]
         current_queue = simulation_state.queues[input_type]
-        return calculate_adjusted_time(base_time, target, sensitivity, delay, queue_history, sim_time, current_queue, damping, state, last_update_time)
+        return calculate_control_effort(base_time, target, sensitivity, delay, queue_history, sim_time, current_queue, damping, state, last_update_time)
 
     elif sim_config.feedback_type == FeedbackType.DUAL:
         if input_type is None or output_type is None:
@@ -169,7 +168,7 @@ def compute_feedback_time(base_time, target, sensitivity, delay, sim_config, sim
             (target - output_q)
         ) * 0.5
 
-        return calculate_adjusted_time(
+        return calculate_control_effort(
             base_time, target, sensitivity, delay, None, sim_time, None, damping, state, last_update_time, combined_error
         )
 
@@ -191,9 +190,9 @@ def log_simulation_parameters(sim_config: SimConfig) -> None:
             )
             if sim_config.use_feedback:
                 config_info += (
-                    f" | target queue: {process_config.producer.target_queue_occupancy}"
-                    f" | sensitivity: {process_config.producer.reaction_sensitivity}"
-                    f" | delay: {process_config.producer.feedback_delay}"
+                    f" | target queue: {process_config.producer.reference_signal}"
+                    f" | sensitivity: {process_config.producer.proportional_gain}"
+                    f" | delay: {process_config.producer.transport_lag}"
                 )
         if process_config.consumer.count > 0:
             config_info += (
@@ -202,9 +201,9 @@ def log_simulation_parameters(sim_config: SimConfig) -> None:
             )
             if sim_config.use_feedback:
                 config_info += (
-                    f" | target queue: {process_config.consumer.target_queue_occupancy}"
-                    f" | sensitivity: {process_config.consumer.reaction_sensitivity}"
-                    f" | delay: {process_config.consumer.feedback_delay}"
+                    f" | target queue: {process_config.consumer.reference_signal}"
+                    f" | sensitivity: {process_config.consumer.proportional_gain}"
+                    f" | delay: {process_config.consumer.transport_lag}"
                 )
         logging.info(config_info)
 
@@ -388,11 +387,11 @@ def objective(trial):
 
     # The higher the value, the more sharp the turns are on the lines, 
     # if above a threashold, it over reacts resulting in oscillations, if below threashols it stabilises
-    test_sensitivity = trial.suggest_float('reaction_sensitivity', 0.01, 0.1)
+    test_sensitivity = trial.suggest_float('proportional_gain', 0.01, 0.1)
 
     production_time = 1.0
     # The higer the value, the more it can diverge from the target, it too high results are spreatic
-    test_delay = trial.suggest_float('feedback_delay', production_time, production_time * 20)
+    test_delay = trial.suggest_float('transport_lag', production_time, production_time * 20)
 
     sim_config = create_sim_config(test_sensitivity, test_delay)
     sim_state = run_simulation(sim_config)
@@ -452,37 +451,37 @@ def apply_feedback_params(sim_config: SimConfig, param_dict: dict[str, float]) -
         producer = process.producer
         consumer = process.consumer
 
-        if producer and producer.target_queue_occupancy is not None:
+        if producer and producer.reference_signal is not None:
             producer = replace(
                 producer,
-                reaction_sensitivity=resolve(
+                proportional_gain=resolve(
                     param_dict,
                     f"{item_type.name}_producer_sensitivity",
                     "global_sensitivity",
-                    producer.reaction_sensitivity
+                    producer.proportional_gain
                 ),
-                feedback_delay=resolve(
+                transport_lag=resolve(
                     param_dict,
                     f"{item_type.name}_producer_delay",
                     "global_delay",
-                    producer.feedback_delay
+                    producer.transport_lag
                 )
             )
 
-        if consumer and consumer.target_queue_occupancy is not None:
+        if consumer and consumer.reference_signal is not None:
             consumer = replace(
                 consumer,
-                reaction_sensitivity=resolve(
+                proportional_gain=resolve(
                     param_dict,
                     f"{item_type.name}_consumer_sensitivity",
                     "global_sensitivity",
-                    consumer.reaction_sensitivity
+                    consumer.proportional_gain
                 ),
-                feedback_delay=resolve(
+                transport_lag=resolve(
                     param_dict,
                     f"{item_type.name}_consumer_delay",
                     "global_delay",
-                    consumer.feedback_delay
+                    consumer.transport_lag
                 )
             )
 
@@ -694,11 +693,11 @@ def run_optuna() -> None:
     
     study.optimize(objective, n_trials=300)
 
-    contour_plot = vis.plot_contour(study, params=['reaction_sensitivity', 'feedback_delay'])
+    contour_plot = vis.plot_contour(study, params=['proportional_gain', 'transport_lag'])
     contour_plot.show()
 
-    best_sensitivity = study.best_params['reaction_sensitivity']
-    best_delay = study.best_params['feedback_delay']
+    best_sensitivity = study.best_params['proportional_gain']
+    best_delay = study.best_params['transport_lag']
 
     logging.info("\n--- Optimization Finished ---")
     logging.info(f"Best Oscillation Score: {study.best_value:.2f}")
@@ -722,7 +721,7 @@ def run_individual(sim_config: SimConfig, shocks=None) -> None:
 # Sim Config Population
 # ==================================================================================================
 
-def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> SimConfig:
+def create_sim_config(proportional_gain: float, transport_lag: float) -> SimConfig:
     return SimConfig(
         simulation_timeout_in_seconds=800,
         queue_interval=1.0,
@@ -735,18 +734,18 @@ def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> Sim
                     count=1,
                     output=ItemType.IRON_INGOT,
                     production_time=0.5,
-                    target_queue_occupancy=50,
-                    reaction_sensitivity=reaction_sensitivity,
-                    feedback_delay=feedback_delay
+                    reference_signal=50,
+                    proportional_gain=proportional_gain,
+                    transport_lag=transport_lag
                 ),
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_INGOT,
                     output=ItemType.IRON_ROD,
                     consumption_time=0.5,
-                    target_queue_occupancy=50,
-                    reaction_sensitivity=reaction_sensitivity,
-                    feedback_delay=feedback_delay
+                    reference_signal=50,
+                    proportional_gain=proportional_gain,
+                    transport_lag=transport_lag
                 ),
             ),
 
@@ -757,9 +756,9 @@ def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> Sim
                     input=ItemType.IRON_ROD,
                     output=ItemType.IRON_WIRE,
                     consumption_time=1.0,
-                    target_queue_occupancy=50,
-                    reaction_sensitivity=reaction_sensitivity,
-                    feedback_delay=feedback_delay
+                    reference_signal=50,
+                    proportional_gain=proportional_gain,
+                    transport_lag=transport_lag
                 ),
             ),
 
@@ -769,9 +768,9 @@ def create_sim_config(reaction_sensitivity: float, feedback_delay: float) -> Sim
                     count=1,
                     input=ItemType.IRON_WIRE,
                     consumption_time=1.0,
-                    target_queue_occupancy=50,
-                    reaction_sensitivity=reaction_sensitivity,
-                    feedback_delay=feedback_delay
+                    reference_signal=50,
+                    proportional_gain=proportional_gain,
+                    transport_lag=transport_lag
                 ),
             ),
         }
@@ -806,11 +805,11 @@ def main() -> None:
         # sim_scenarios.get_multiple_oscillations_input_f,
         # sim_scenarios.get_multiple_oscillations_output_f,
         # sim_scenarios.get_multiple_oscillations_dual_f,
-        # sim_scenarios.get_second_order_sim_no_delay_output_feedback,
-        sim_scenarios.get_balanced_flow,
-        sim_scenarios.get_bottleneck,
-        sim_scenarios.get_starvation,
-        sim_scenarios.get_backpressure_propagation,
+        sim_scenarios.get_second_order_sim_no_delay_output_feedback,
+        # sim_scenarios.get_balanced_flow,
+        # sim_scenarios.get_bottleneck,
+        # sim_scenarios.get_starvation,
+        # sim_scenarios.get_backpressure_propagation,
     ]:
 
         sim_config, stability_config = scenario()

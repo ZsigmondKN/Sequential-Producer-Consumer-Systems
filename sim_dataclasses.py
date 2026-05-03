@@ -38,7 +38,7 @@ class ProducerState:
     process_id: int
     item_type: ItemType
     next_ready_time: float = 0.0
-    control_velocity: float = 0.0
+    error_integral: float = 0.0
     last_update_time: float = 0.0
 
 
@@ -47,7 +47,7 @@ class ConsumerState:
     process_id: int
     item_type: ItemType
     next_ready_time: float = 0.0
-    control_velocity: float = 0.0
+    error_integral: float = 0.0
     last_update_time: float = 0.0
 
 @dataclass
@@ -67,10 +67,11 @@ class ProducerConfig:
     count: int = 0
     output: ItemType | None = None
     production_time: float | None = None
-    # P-Control below
-    target_queue_occupancy: int | None = None
-    reaction_sensitivity: float = 0.0
-    feedback_delay: float = 0.0
+    # PI-Control below
+    reference_signal: int | None = None
+    proportional_gain: float = 0.0
+    transport_lag: float = 0.0
+    integral_gain: float = 0.0
 
 @dataclass(frozen=True)
 class ConsumerConfig:
@@ -78,10 +79,11 @@ class ConsumerConfig:
     input: ItemType | None = None
     output: ItemType | None = None
     consumption_time: float | None = None
-    # P-Control below
-    target_queue_occupancy: int | None = None
-    reaction_sensitivity: float = 0.0
-    feedback_delay: float = 0.0
+    # PI-Control below
+    reference_signal: int | None = None
+    proportional_gain: float = 0.0
+    transport_lag: float = 0.0
+    integral_gain: float = 0.0
 
 @dataclass(frozen=True)
 class ProcessConfig:
