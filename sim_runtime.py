@@ -131,39 +131,52 @@ def compute_pi_control_signal(state, error, dt, Kp, Ki, u_min, u_max):
 
     return u
 
-def get_feedback_signal(state, simulation_state, sim_config, config, control_time):
-    """Returns the feedback signal used by the controller."""
-    # Determine which queue this controller observes
-    if isinstance(state, ProducerState):
-        observed_queue = config.output
-    else:
-        observed_queue = (
-            config.output if sim_config.feedback_type == FeedbackType.OUTPUT
-            else config.input
-        )
+def get_feedback_signal(simulation_state, sim_config, config, control_time):
+    def delayed_queue_value(queue_type):
+        delay = config.transport_lag
+        current_value = simulation_state.queues[queue_type]
 
-    if observed_queue is None:
+        if delay is None or delay <= 0:
+            return current_value
+
+        history = simulation_state.queue_history[queue_type]
+        if not history:
+            return 0
+
+        target_time = control_time - delay
+
+        if target_time <= history[0][0]:
+            return 0
+
+        for timestamp, value in reversed(history):
+            if timestamp <= target_time:
+                return value
+
+        return 0
+    
+    input_q = getattr(config, "input", None)
+    output_q = getattr(config, "output", None)
+
+    if sim_config.feedback_type == FeedbackType.INPUT:
+        if input_q is None:
+            return None
+        observed = [input_q]
+
+    elif sim_config.feedback_type == FeedbackType.OUTPUT:
+        if output_q is None:
+            return None
+        observed = [output_q]
+
+    elif sim_config.feedback_type == FeedbackType.DUAL:
+        if input_q is None or output_q is None:
+            return None
+        observed = [input_q, output_q]
+
+    else:
         return None
 
-    current_value = simulation_state.queues[observed_queue]
-    history = simulation_state.queue_history[observed_queue]
-
-    # Apply transport delay if configured
-    delay = config.transport_lag
-    if delay <= 0:
-        return current_value
-
-    # If we don't have history that far back, assume empty system
-    target_time = control_time - delay
-    if target_time <= history[0][0]:
-        return 0
-
-    # Find most recent value before target_time
-    for timestamp, value in reversed(history):
-        if timestamp <= target_time:
-            return value
-
-    return 0
+    values = [delayed_queue_value(q) for q in observed]
+    return float(sum(values) / len(values)) if values else None
 
 def compute_feedback_error(config, feedback_signal):
     """Returns normalised error from reference signal."""
@@ -184,7 +197,7 @@ def update_feedback_controllers(simulation_state, sim_config, processes, control
             state.control_signal = 0.0
             continue
 
-        feedback_signal = get_feedback_signal(state, simulation_state, sim_config, config, control_time)
+        feedback_signal = get_feedback_signal(simulation_state, sim_config, config, control_time)
         if feedback_signal is None:
             continue
 
@@ -448,16 +461,10 @@ def run_simulation(sim_config: SimConfig, shocks=None) -> SimulationState:
 # ==================================================================================================
 
 def objective(trial):
+    test_proportional_gain = trial.suggest_float('proportional_gain', 0, 1)
+    test_integral_gain = trial.suggest_float('integral_gain', 0, 1)
 
-    # The higher the value, the more sharp the turns are on the lines, 
-    # if above a threashold, it over reacts resulting in oscillations, if below threashols it stabilises
-    test_sensitivity = trial.suggest_float('proportional_gain', 0.01, 0.1)
-
-    production_time = 1.0
-    # The higer the value, the more it can diverge from the target, it too high results are spreatic
-    test_delay = trial.suggest_float('transport_lag', production_time, production_time * 20)
-
-    sim_config = create_sim_config(test_sensitivity, test_delay)
+    sim_config = create_sim_config(test_proportional_gain, test_integral_gain)
     sim_state = run_simulation(sim_config)
 
     warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.5
@@ -476,25 +483,19 @@ def objective(trial):
     return float(score)
 
 def oscillation_score(series, capacity):
-    if len(series) < 10:
+    if len(series) < 20:
         return 0
-    
-    std_dev = np.std(series)
-    crossings = 0
-    for i in range(2, len(series)):
-        a, b, c = series[i-2], series[i-1], series[i]
-        if (b > a and b > c) or (b < a and b < c):
-            crossings += 1
-    min_q = min(series)
-    max_q = max(series)
-    penalty = 0
 
-    if min_q < 0.1 * capacity:
-        penalty += (0.1 * capacity - min_q)
-    if max_q > 0.9 * capacity:
-        penalty += (max_q - 0.9 * capacity)
+    # Split into chunks
+    chunks = np.array_split(series, 4)
+    stds = [np.std(c) for c in chunks]
 
-    return (std_dev * crossings) - penalty
+    # Reward consistent amplitude
+    consistency = -np.std(stds)
+
+    amplitude = np.mean(stds)
+
+    return amplitude + consistency
 
 # ==================================================================================================
 # Stability Analysis
@@ -521,13 +522,19 @@ def apply_feedback_params(sim_config: SimConfig, param_dict: dict[str, float]) -
                 proportional_gain=resolve(
                     param_dict,
                     f"{item_type.name}_producer_sensitivity",
-                    "global_sensitivity",
+                    "global_proportional_gain",
                     producer.proportional_gain
+                ),
+                integral_gain=resolve(
+                    param_dict,
+                    f"{item_type.name}_producer_integral",
+                    "global_integral_gain",
+                    producer.integral_gain
                 ),
                 transport_lag=resolve(
                     param_dict,
                     f"{item_type.name}_producer_delay",
-                    "global_delay",
+                    "global_transport_lag",
                     producer.transport_lag
                 )
             )
@@ -538,13 +545,19 @@ def apply_feedback_params(sim_config: SimConfig, param_dict: dict[str, float]) -
                 proportional_gain=resolve(
                     param_dict,
                     f"{item_type.name}_consumer_sensitivity",
-                    "global_sensitivity",
+                    "global_proportional_gain",
                     consumer.proportional_gain
+                ),
+                integral_gain=resolve(
+                    param_dict,
+                    f"{item_type.name}_consumer_integral",
+                    "global_integral_gain",
+                    consumer.integral_gain
                 ),
                 transport_lag=resolve(
                     param_dict,
                     f"{item_type.name}_consumer_delay",
-                    "global_delay",
+                    "global_transport_lag",
                     consumer.transport_lag
                 )
             )
@@ -635,7 +648,7 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
 
         i, j = max_point[1]
 
-        x_center  = x_values[j] + 0.1 # offset to align with the center of the cell
+        x_center  = x_values[j]
         y_center = y_values[i]
 
         ax.plot(x_center, y_center, 'ro', label='Maximum instability')
@@ -755,20 +768,20 @@ def run_optuna() -> None:
     
     logging.info("Starting Optuna optimization... Please wait while it runs 300 simulations.")
     
-    study.optimize(objective, n_trials=300)
+    study.optimize(objective, n_trials=500)
 
-    contour_plot = vis.plot_contour(study, params=['proportional_gain', 'transport_lag'])
+    contour_plot = vis.plot_contour(study, params=['proportional_gain', 'integral_gain'])
     contour_plot.show()
 
-    best_sensitivity = study.best_params['proportional_gain']
-    best_delay = study.best_params['transport_lag']
+    best_proportional_gain = study.best_params['proportional_gain']
+    best_integral_gain = study.best_params['integral_gain']
 
     logging.info("\n--- Optimization Finished ---")
     logging.info(f"Best Oscillation Score: {study.best_value:.2f}")
-    logging.info(f"Winning Parameters: Sensitivity = {best_sensitivity:.4f}, Delay = {best_delay:.2f}s")
-    logging.info("\nRunning final simulation with the best parameters to plot results...")
+    logging.info(f"best_proportional_gain = {best_proportional_gain:.7f}, best_integral_gain = {best_integral_gain:.7f}")
+    logging.info("\nRunning final simulation with the best parameters")
 
-    best_sim_config = create_sim_config(best_sensitivity, best_delay)
+    best_sim_config = create_sim_config(best_proportional_gain, best_integral_gain)
     best_sim_state = run_simulation(best_sim_config)
 
     log_simulation_parameters(best_sim_config)
@@ -785,9 +798,9 @@ def run_individual(sim_config: SimConfig, shocks=None) -> None:
 # Sim Config Population
 # ==================================================================================================
 
-def create_sim_config(proportional_gain: float, transport_lag: float) -> SimConfig:
+def create_sim_config(proportional_gain: float, integral_gain: float) -> SimConfig:
     return SimConfig(
-        simulation_timeout_in_seconds=800,
+        simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
         feedback_type = FeedbackType.OUTPUT,
@@ -797,22 +810,21 @@ def create_sim_config(proportional_gain: float, transport_lag: float) -> SimConf
                 producer=ProducerConfig(
                     count=1,
                     output=ItemType.IRON_INGOT,
-                    production_time=0.5,
+                    production_time=1.0,
                     reference_signal=50,
                     proportional_gain=proportional_gain,
-                    transport_lag=transport_lag
+                    integral_gain=integral_gain,
                 ),
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_INGOT,
                     output=ItemType.IRON_ROD,
-                    consumption_time=0.5,
-                    reference_signal=50,
+                    consumption_time=1.0,
+                    reference_signal=50, 
                     proportional_gain=proportional_gain,
-                    transport_lag=transport_lag
+                    integral_gain=integral_gain,
                 ),
             ),
-
             ItemType.IRON_ROD: ProcessConfig(
                 queue_capacity=100,
                 consumer=ConsumerConfig(
@@ -822,10 +834,9 @@ def create_sim_config(proportional_gain: float, transport_lag: float) -> SimConf
                     consumption_time=1.0,
                     reference_signal=50,
                     proportional_gain=proportional_gain,
-                    transport_lag=transport_lag
+                    integral_gain=integral_gain,
                 ),
             ),
-
             ItemType.IRON_WIRE: ProcessConfig(
                 queue_capacity=100,
                 consumer=ConsumerConfig(
@@ -834,7 +845,7 @@ def create_sim_config(proportional_gain: float, transport_lag: float) -> SimConf
                     consumption_time=1.0,
                     reference_signal=50,
                     proportional_gain=proportional_gain,
-                    transport_lag=transport_lag
+                    integral_gain=integral_gain,
                 ),
             ),
         }
@@ -871,13 +882,13 @@ def main() -> None:
         # sim_scenarios.get_starvation,
         # sim_scenarios.get_backpressure_propagation,
         # sim_scenarios.get_atomic_second_order_system,
-        sim_scenarios.get_sequential_higher_order_system_three_processes,
-        sim_scenarios.get_multiple_oscillations_output_f,
+        # sim_scenarios.get_sequential_higher_order_system_three_processes,
+        # sim_scenarios.get_sequential_higher_order_system_four_processes,
         # sim_scenarios.get_sequential_higher_order_system_five_processes,
         # sim_scenarios.get_a_single_oscillation,
-        # sim_scenarios.get_multiple_oscillations_input_f,
-        # sim_scenarios.get_multiple_oscillations_output_f,
-        # sim_scenarios.get_multiple_oscillations_dual_f,
+        sim_scenarios.get_multiple_oscillations_input_f,
+        sim_scenarios.get_multiple_oscillations_output_f,
+        sim_scenarios.get_multiple_oscillations_dual_f,
     ]:
 
         sim_config, stability_config = scenario()
@@ -888,11 +899,11 @@ def main() -> None:
         #     f"Running {len(stability_config.get("x_values")) * len(stability_config.get("y_values"))} stability experiments..."
         # )
 
-        # run_stability_experiment(
-        #     sim_config,
-        #     stability_config,
-        #     debug=True
-        # )
+        run_stability_experiment(
+            sim_config,
+            stability_config,
+            debug=True
+        )
 
 if __name__ == '__main__':
     main()
