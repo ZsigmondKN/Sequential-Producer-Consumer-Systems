@@ -42,6 +42,7 @@ def producer(state: ProducerState, simulation_state: SimulationState, sim_config
 
         # --- multiplicative control (textbook consistent) ---
         controlled_rate = base_rate * (1.0 + u)
+        # controlled_rate = base_rate * math.exp(u)
 
         # --- enforce physical constraint ---
         if controlled_rate <= 0:
@@ -83,6 +84,7 @@ def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config
 
         base_rate = 1.0 / base_consumption_time
         controlled_rate = base_rate * (1.0 + u)
+        # controlled_rate = base_rate * math.exp(u)
 
         if controlled_rate <= 0:
             controlled_rate = 1e-6
@@ -928,7 +930,7 @@ def main() -> None:
         # sim_scenarios.get_backpressure_propagation,
         # sim_scenarios.get_atomic_second_order_system,
         sim_scenarios.get_sequential_higher_order_system_three_processes,
-        # sim_scenarios.get_sequential_higher_order_system_four_processes,
+        sim_scenarios.get_multiple_oscillations_output_f,
         # sim_scenarios.get_sequential_higher_order_system_five_processes,
         # sim_scenarios.get_a_single_oscillation,
         # sim_scenarios.get_multiple_oscillations_input_f,
