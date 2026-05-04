@@ -757,6 +757,65 @@ def run_stability_experiment(base_config: SimConfig, stability_config: dict, deb
             x_values, y_values, std_matrix, base_config.feedback_type
         )
 
+# ==================================================================================================
+# Damping Calculations
+# ==================================================================================================
+
+def estimate_damping_ratio_from_signal(series):
+    """
+    Estimate damping ratio using logarithmic decrement.
+    Works with as few as 2 peaks.
+    """
+    if len(series) < 10:
+        return None
+
+    series = np.array(series)
+
+    # Light smoothing (helps a LOT with queue data)
+    smoothed = np.convolve(series, np.ones(3)/3, mode='same')
+
+    # Peak detection (relaxed)
+    peaks = []
+    for i in range(1, len(smoothed) - 1):
+        if smoothed[i] >= smoothed[i-1] and smoothed[i] >= smoothed[i+1]:
+            peaks.append(smoothed[i])
+
+    if len(peaks) < 2:
+        return None
+
+    # --- Find first valid decaying pair ---
+    for i in range(len(peaks) - 1):
+        x1, x2 = peaks[i], peaks[i+1]
+
+        if x1 > 0 and x2 > 0 and x1 > x2:
+            delta = np.log(x1 / x2)
+            zeta = delta / np.sqrt(4 * np.pi**2 + delta**2)
+            return zeta
+
+    return None
+
+def compute_scenario_damping(sim_config: SimConfig, sim_state: SimulationState):
+    """
+    Compute damping ratios for each queue in the system.
+    Uses post-warmup data only.
+    """
+    warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.3
+
+    results = {}
+
+    # Collect time series per queue
+    queues = {item.value: [] for item in sim_config.processes}
+
+    for log in sim_state.queue_logs:
+        if log.timestamp > warmup_cutoff:
+            queues[log.queue_name].append(log.queue_usage)
+
+    # Compute damping per queue
+    for name, series in queues.items():
+        zeta = estimate_damping_ratio_from_signal(series)
+        results[name] = zeta
+
+    return results
 
 # ==================================================================================================
 # Simulation Types
@@ -793,6 +852,17 @@ def run_individual(sim_config: SimConfig, shocks=None) -> None:
     log_simulation_parameters(sim_config)
     log_results(sim_state)
     plot_results(sim_state, shocks=shocks)
+
+    damping_results = compute_scenario_damping(sim_config, sim_state)
+    # --- NEW: Damping ratio estimation ---
+    damping_results = compute_scenario_damping(sim_config, sim_state)
+
+    logging.info("\n--- Damping Ratio Estimation (Log Decrement) ---")
+    for queue_name, zeta in damping_results.items():
+        if zeta is None:
+            logging.info(f"{queue_name}: No oscillation / cannot estimate ζ")
+        else:
+            logging.info(f"{queue_name}: ζ ≈ {zeta:.4f}")
 
 # ==================================================================================================
 # Sim Config Population
@@ -882,13 +952,14 @@ def main() -> None:
         # sim_scenarios.get_starvation,
         # sim_scenarios.get_backpressure_propagation,
         # sim_scenarios.get_atomic_second_order_system,
-        # sim_scenarios.get_sequential_higher_order_system_three_processes,
+        sim_scenarios.get_sequential_higher_order_system_three_processes,
         # sim_scenarios.get_sequential_higher_order_system_four_processes,
         # sim_scenarios.get_sequential_higher_order_system_five_processes,
         # sim_scenarios.get_a_single_oscillation,
-        sim_scenarios.get_multiple_oscillations_input_f,
-        sim_scenarios.get_multiple_oscillations_output_f,
-        sim_scenarios.get_multiple_oscillations_dual_f,
+        # sim_scenarios.get_multiple_oscillations_input_f,
+        # sim_scenarios.get_multiple_oscillations_output_f,
+        # sim_scenarios.get_multiple_oscillations_dual_f,
+        sim_scenarios.get_damping_test
     ]:
 
         sim_config, stability_config = scenario()
@@ -899,11 +970,11 @@ def main() -> None:
         #     f"Running {len(stability_config.get("x_values")) * len(stability_config.get("y_values"))} stability experiments..."
         # )
 
-        run_stability_experiment(
-            sim_config,
-            stability_config,
-            debug=True
-        )
+        # run_stability_experiment(
+        #     sim_config,
+        #     stability_config,
+        #     debug=True
+        # )
 
 if __name__ == '__main__':
     main()

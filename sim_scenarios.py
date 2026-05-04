@@ -6,6 +6,10 @@ from sim_dataclasses import (
     ItemType, SimConfig, ProcessConfig, ProducerConfig, ConsumerConfig, FeedbackType
 )
 
+# ==================================================================================================
+# Open Loop
+# ==================================================================================================
+
 def get_balanced_flow() -> tuple[SimConfig, None]:
     stability_config = None
     sim_config = SimConfig(
@@ -155,6 +159,10 @@ def get_backpressure_propagation() -> tuple[SimConfig, None]:
     )
     return sim_config, stability_config
 
+# ==================================================================================================
+# Closed loop - baseline
+# ==================================================================================================
+
 def get_atomic_second_order_system() -> tuple[SimConfig, dict]:
     stability_config = {
         "mode": "global",
@@ -191,6 +199,10 @@ def get_atomic_second_order_system() -> tuple[SimConfig, dict]:
     )
 
     return sim_config, stability_config
+
+# ==================================================================================================
+# Closed loop - Sequence Length Experiment
+# ==================================================================================================
 
 def get_sequential_higher_order_system_three_processes() -> tuple[SimConfig, dict]:
     stability_config = {
@@ -378,6 +390,63 @@ def get_sequential_higher_order_system_four_processes() -> tuple[SimConfig, dict
 #     )
 
 #     return sim_config, stability_config
+
+# ==================================================================================================
+# Closed loop - Damping Test
+# ==================================================================================================
+
+def get_damping_test() -> tuple[SimConfig, dict]:
+    stability_config = {
+        "mode": "global",
+        "x_param": "global_proportional_gain",
+        "y_param": "global_integral_gain",
+        "x_values": np.linspace(0.0, 1.0, 25),
+        "y_values": np.linspace(0.0, 0.1, 25),
+    }
+    local_p_gain = 1
+    local_i_gain = 0.1
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=1000,
+        queue_interval=1.0,
+        use_feedback=True,
+        feedback_type = FeedbackType.OUTPUT,
+        processes={
+            ItemType.IRON_INGOT: ProcessConfig(
+                queue_capacity=100,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_ROD,
+                    consumption_time=1.0,
+                    reference_signal=50, 
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                ),
+            ),
+            ItemType.IRON_ROD: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1, 
+                    input=ItemType.IRON_ROD, 
+                    consumption_time=1.0, 
+                ),
+            ),
+        }
+    )
+
+    return sim_config, stability_config
+
+# ==================================================================================================
+# Closed loop - Old Delay Experiments
+# ==================================================================================================
 
 def get_multiple_oscillations_output_f() -> tuple[dict, SimConfig]:
     """Configuration extracted from the optimized run producing stable oscillations."""
