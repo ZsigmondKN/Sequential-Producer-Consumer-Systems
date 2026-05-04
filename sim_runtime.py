@@ -36,19 +36,7 @@ def producer(state: ProducerState, simulation_state: SimulationState, sim_config
         return
     
     if sim_config.use_feedback:
-        u = state.control_output
-
-        base_rate = 1.0 / base_production_time
-
-        # --- multiplicative control (textbook consistent) ---
-        controlled_rate = base_rate * (1.0 + u)
-        # controlled_rate = base_rate * math.exp(u)
-
-        # --- enforce physical constraint ---
-        if controlled_rate <= 0:
-            controlled_rate = 1e-6
-
-        next_production_time = 1.0 / controlled_rate
+        next_production_time = apply_feedback_control_to_processing_time(base_production_time, state.control_signal)
     else:
         next_production_time = base_production_time
 
@@ -80,16 +68,7 @@ def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config
             return
         
     if sim_config.use_feedback:
-        u = state.control_output
-
-        base_rate = 1.0 / base_consumption_time
-        controlled_rate = base_rate * (1.0 + u)
-        # controlled_rate = base_rate * math.exp(u)
-
-        if controlled_rate <= 0:
-            controlled_rate = 1e-6
-
-        next_consumption_time = 1.0 / controlled_rate
+        next_consumption_time = apply_feedback_control_to_processing_time(base_consumption_time, state.control_signal)
     else:
         next_consumption_time = base_consumption_time
 
@@ -105,164 +84,127 @@ def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config
         # output will appear when the process finishes
         simulation_state.pending_outputs.append((state.next_ready_time, output_type))
 
-def get_queue_occupancy(history: list[tuple[float, int]], current_time: float, delay: float) -> int:
-    """Returns the occupancy of the queue exactly 'delay' seconds ago."""
-    target_time = current_time - delay
-    # Assume empty before the delay period has passed
-    if target_time <= history[0][0]:
-        return 0
-    
-    for timestamp, occupancy in reversed(history):
-        if timestamp <= target_time:
-            return occupancy
-    return 0
-
-def update_pi_controller(state, error, dt, Kp, Ki, u_min, u_max, Kaw):
+def apply_feedback_control_to_processing_time(base_processing_time, u):
     """
-    Textbook PI controller with back-calculation anti-windup.
-    
-    Canonical form:
-        u = Kp * e + I
-        I_dot = Ki * e + Kaw * (u_sat - u_raw)
+    Actuator (static nonlinear mapping):
+
+        T(t) = 1 / r(t)
+        r(t) = r0 * (1 + u(t))
+
+    Mapping to implementation:
+        - T(t)                 → processing time
+        - r(t)                 → controlled_rate
+        - r0 = 1 / T_base      → base_rate
+        - T_base               → base_processing_time
+        - u(t)                 → control_signal
+
+    Notes:
+        - Control acts on processing rate, not time directly
+        - Static nonlinearity: T(t) = f(u)
     """
+    base_rate = 1.0 / base_processing_time
+    controlled_rate = base_rate * (1.0 + u)
+    return 1.0 / max(controlled_rate, 1e-6)
 
-    # --- 1. Compute raw (unsaturated) control ---
-    u_raw = Kp * error + state.error_integral
+def compute_pi_control_signal(state, error, dt, Kp, Ki, u_min, u_max):
+    """
+    PI controller:
 
-    # --- 2. Apply saturation ---
-    u_sat = max(min(u_raw, u_max), u_min)
+        u(t) = Kp * e(t) + Ki * ∫ e(t) dt
 
-    # --- 3. Update integral state (includes Ki scaling) ---
-    state.error_integral += (Ki * error + Kaw * (u_sat - u_raw)) * dt
+    Mapping to implementation:
+        - e(t)  → error
+        - Kp    → proportional_gain
+        - Ki    → integral_gain
+        - ∫ e(t) dt → state.error_integral
 
-    # --- 4. Compute final control using updated integral ---
+    The integral term is accumulated over time in state.error_integral.
+    """
+    # Accumulate integral term: Ki * ∫ e(t) dt
+    state.error_integral += Ki * error * dt
+
+    # Control signal: u(t) = Kp * e(t) + integral
     u = Kp * error + state.error_integral
 
-    # --- 5. Enforce saturation again ---
+    # Apply actuator limits
     u = max(min(u, u_max), u_min)
 
     return u
 
-def update_all_controllers(simulation_state, sim_config, processes, control_time):
+def get_feedback_signal(state, simulation_state, sim_config, config, control_time):
+    """Returns the feedback signal used by the controller."""
+    # Determine which queue this controller observes
+    if isinstance(state, ProducerState):
+        observed_queue = config.output
+    else:
+        observed_queue = (
+            config.output if sim_config.feedback_type == FeedbackType.OUTPUT
+            else config.input
+        )
+
+    if observed_queue is None:
+        return None
+
+    current_value = simulation_state.queues[observed_queue]
+    history = simulation_state.queue_history[observed_queue]
+
+    # Apply transport delay if configured
+    delay = config.transport_lag
+    if delay <= 0:
+        return current_value
+
+    # If we don't have history that far back, assume empty system
+    target_time = control_time - delay
+    if target_time <= history[0][0]:
+        return 0
+
+    # Find most recent value before target_time
+    for timestamp, value in reversed(history):
+        if timestamp <= target_time:
+            return value
+
+    return 0
+
+def compute_feedback_error(config, feedback_signal):
+    """Returns normalised error from reference signal."""
+
+    ref_signal = config.reference_signal
+    if ref_signal is None or ref_signal <= 0:
+        return None
+
+    return (ref_signal - feedback_signal) / ref_signal
+
+def update_feedback_controllers(simulation_state, sim_config, processes, control_time):
+    """Compute and update PI control signals u(t) for all processes based on current feedback."""
     for state in processes:
-
-        if isinstance(state, ProducerState):
-            process = sim_config.processes[state.item_type]
-            config = process.producer
-            input_type = None
-            output_type = config.output
-            is_producer = True
-
-        else:
-            process = sim_config.processes[state.item_type]
-            config = process.consumer
-            input_type = config.input
-            output_type = config.output
-            is_producer = False
+        process = sim_config.processes[state.item_type]
+        config = process.producer if isinstance(state, ProducerState) else process.consumer
 
         if not sim_config.use_feedback or config.reference_signal is None:
-            state.control_output = 0.0
+            state.control_signal = 0.0
             continue
 
-        # --- Measure queue (with delay) ---
-        if sim_config.feedback_type == FeedbackType.OUTPUT and output_type:
-            history = simulation_state.queue_history[output_type]
-            current = simulation_state.queues[output_type]
-            capacity = sim_config.processes[output_type].queue_capacity
-
-        elif sim_config.feedback_type == FeedbackType.INPUT and input_type:
-            history = simulation_state.queue_history[input_type]
-            current = simulation_state.queues[input_type]
-            capacity = sim_config.processes[input_type].queue_capacity
-
-        elif sim_config.feedback_type == FeedbackType.DUAL and input_type and output_type:
-
-            input_capacity  = sim_config.processes[input_type].queue_capacity
-            output_capacity = sim_config.processes[output_type].queue_capacity
-
-            if config.transport_lag > 0:
-                input_q = get_queue_occupancy(
-                    simulation_state.queue_history[input_type], control_time, config.transport_lag
-                )
-                output_q = get_queue_occupancy(
-                    simulation_state.queue_history[output_type], control_time, config.transport_lag
-                )
-            else:
-                input_q  = simulation_state.queues[input_type]
-                output_q = simulation_state.queues[output_type]
-
-
-            # tracking: keep output queue near reference
-            ref = config.reference_signal
-
-            if ref <= 0:
-                continue
-
-            tracking_error = (ref - output_q) / ref
-
-            if is_producer:
-                # producer regulates output buffer only
-                error = tracking_error
-
-            else:
-                # flow balance: match input and output rates (normalized on input capacity)
-                flow_error = (input_q - output_q) / max(1.0, input_q + output_q)
-
-                # combine objectives
-                error = 0.5 * flow_error + 0.5 * tracking_error
-        else:
+        feedback_signal = get_feedback_signal(state, simulation_state, sim_config, config, control_time)
+        if feedback_signal is None:
             continue
 
-        if sim_config.feedback_type != FeedbackType.DUAL:
-            if config.transport_lag > 0:
-                queue_value = get_queue_occupancy(history, control_time, config.transport_lag)
-            else:
-                queue_value = current
+        error = compute_feedback_error(config, feedback_signal)
+        if error is None:
+            continue
 
-            # --- normalized error ---
-            ref = config.reference_signal
-
-            if ref <= 0:
-                continue
-
-            error = (ref - queue_value) / ref
-
-        # --- PI controller ---
-        # --- gains ---
-        Kp = config.proportional_gain
-        Ki = config.integral_gain
-
-        # --- anti-windup tuning ---
-        Taw = getattr(config, "anti_windup_time_constant", 1.0)
-        Kaw = 1.0 / Taw
-
-        # --- saturation ---
-        u_min = -5
-        u_max = 5
-
-        # --- compute real dt ---
         dt = control_time - state.last_update_time
-
-        # guard against first step or zero dt
         if dt <= 0:
             continue
 
-        # --- compute control ---
-        u = update_pi_controller(
-            state=state,
-            error=error,
-            dt=dt,
-            Kp=Kp,
-            Ki=Ki,
-            u_min=u_min,
-            u_max=u_max,
-            Kaw=Kaw
-        )
+        # Controller parameters
+        Kp = config.proportional_gain
+        Ki = config.integral_gain
 
-        # --- update timestamp AFTER using dt ---
+        # Saturation limits
+        u_min, u_max = -1, 1
+        u = compute_pi_control_signal(state, error, dt, Kp, Ki, u_min, u_max)
+        state.control_signal = u
         state.last_update_time = control_time
-
-        state.control_output = u
 
 # ==================================================================================================
 # Reporting - logs and diagrams
@@ -482,7 +424,7 @@ def run_simulation(sim_config: SimConfig, shocks=None) -> SimulationState:
             sim_time = duration
 
         while next_control_time <= next_event_time:
-            update_all_controllers(
+            update_feedback_controllers(
                 simulation_state,
                 sim_config,
                 processes,

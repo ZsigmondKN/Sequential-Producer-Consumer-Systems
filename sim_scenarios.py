@@ -404,7 +404,7 @@ def get_multiple_oscillations_output_f() -> tuple[dict, SimConfig]:
                     input=ItemType.IRON_WIRE, 
                     consumption_time=1.0,
                     reference_signal=50, 
-                    proportional_gain=2, 
+                    proportional_gain=1, 
                     transport_lag=19.651752527891375,
                     integral_gain = 0.0
                 ),

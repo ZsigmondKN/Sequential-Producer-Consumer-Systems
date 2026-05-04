@@ -40,7 +40,7 @@ class ProducerState:
     next_ready_time: float = 0.0
     error_integral: float = 0.0
     last_update_time: float = 0.0
-    control_output: float = 0.0
+    control_signal: float = 0.0
 
 @dataclass
 class ConsumerState:
@@ -49,7 +49,7 @@ class ConsumerState:
     next_ready_time: float = 0.0
     error_integral: float = 0.0
     last_update_time: float = 0.0
-    control_output: float = 0.0
+    control_signal: float = 0.0
 
 @dataclass
 class SimulationLogs:
