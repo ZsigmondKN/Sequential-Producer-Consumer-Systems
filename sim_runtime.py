@@ -463,11 +463,12 @@ def run_simulation(sim_config: SimConfig, shocks=None) -> SimulationState:
 def objective(trial):
     test_proportional_gain = trial.suggest_float('proportional_gain', 0, 1)
     test_integral_gain = trial.suggest_float('integral_gain', 0, 1)
+    test_transport_lag = trial.suggest_float('transport_lag', 0, 100)
 
-    sim_config = create_sim_config(test_proportional_gain, test_integral_gain)
+    sim_config = create_sim_config(test_proportional_gain, test_transport_lag)
     sim_state = run_simulation(sim_config)
 
-    warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.5
+    warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.3
     queues = {item.value: [] for item in sim_config.processes}
 
     for log in sim_state.queue_logs:
@@ -648,8 +649,10 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
 
         i, j = max_point[1]
 
-        x_center  = x_values[j]
-        y_center = y_values[i]
+        x_center = x_values[i]
+        y_center = y_values[j]
+
+        logging.info(f"x_center = {x_center:.7f}, y_center = {y_center:.7f}")
 
         ax.plot(x_center, y_center, 'ro', label='Maximum instability')
         ax.legend()
@@ -710,7 +713,7 @@ def run_stability_experiment(base_config: SimConfig, stability_config: dict, deb
 
             sim_state, sim_config = run_parametrized_simulation(base_config, x, y, stability_config)
 
-            warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.5
+            warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.3
             queues = extract_queue_series(sim_config, sim_state, warmup_cutoff)
 
             std_score = 0
@@ -757,6 +760,65 @@ def run_stability_experiment(base_config: SimConfig, stability_config: dict, deb
             x_values, y_values, std_matrix, base_config.feedback_type
         )
 
+# ==================================================================================================
+# Damping Calculations
+# ==================================================================================================
+
+def estimate_damping_ratio_from_signal(series):
+    """
+    Estimate damping ratio using logarithmic decrement.
+    Works with as few as 2 peaks.
+    """
+    if len(series) < 10:
+        return None
+
+    series = np.array(series)
+
+    # Light smoothing (helps a LOT with queue data)
+    smoothed = np.convolve(series, np.ones(3)/3, mode='same')
+
+    # Peak detection (relaxed)
+    peaks = []
+    for i in range(1, len(smoothed) - 1):
+        if smoothed[i] >= smoothed[i-1] and smoothed[i] >= smoothed[i+1]:
+            peaks.append(smoothed[i])
+
+    if len(peaks) < 2:
+        return None
+
+    # --- Find first valid decaying pair ---
+    for i in range(len(peaks) - 1):
+        x1, x2 = peaks[i], peaks[i+1]
+
+        if x1 > 0 and x2 > 0 and x1 > x2:
+            delta = np.log(x1 / x2)
+            zeta = delta / np.sqrt(4 * np.pi**2 + delta**2)
+            return zeta
+
+    return None
+
+def compute_scenario_damping(sim_config: SimConfig, sim_state: SimulationState):
+    """
+    Compute damping ratios for each queue in the system.
+    Uses post-warmup data only.
+    """
+    warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.3
+
+    results = {}
+
+    # Collect time series per queue
+    queues = {item.value: [] for item in sim_config.processes}
+
+    for log in sim_state.queue_logs:
+        if log.timestamp > warmup_cutoff:
+            queues[log.queue_name].append(log.queue_usage)
+
+    # Compute damping per queue
+    for name, series in queues.items():
+        zeta = estimate_damping_ratio_from_signal(series)
+        results[name] = zeta
+
+    return results
 
 # ==================================================================================================
 # Simulation Types
@@ -794,6 +856,14 @@ def run_individual(sim_config: SimConfig, shocks=None) -> None:
     log_results(sim_state)
     plot_results(sim_state, shocks=shocks)
 
+    # damping_results = compute_scenario_damping(sim_config, sim_state)
+    # logging.info("\n--- Damping Ratio Estimation (Log Decrement) ---")
+    # for queue_name, zeta in damping_results.items():
+    #     if zeta is None:
+    #         logging.info(f"{queue_name}: No oscillation / cannot estimate ζ")
+    #     else:
+    #         logging.info(f"{queue_name}: ζ ≈ {zeta:.4f}")
+
 # ==================================================================================================
 # Sim Config Population
 # ==================================================================================================
@@ -813,39 +883,24 @@ def create_sim_config(proportional_gain: float, integral_gain: float) -> SimConf
                     production_time=1.0,
                     reference_signal=50,
                     proportional_gain=proportional_gain,
-                    integral_gain=integral_gain,
+                    transport_lag=integral_gain
                 ),
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_INGOT,
                     output=ItemType.IRON_ROD,
-                    consumption_time=1.0,
+                    consumption_time=0.5,
                     reference_signal=50, 
                     proportional_gain=proportional_gain,
-                    integral_gain=integral_gain,
+                    transport_lag=integral_gain
                 ),
             ),
             ItemType.IRON_ROD: ProcessConfig(
                 queue_capacity=100,
                 consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_ROD,
-                    output=ItemType.IRON_WIRE,
-                    consumption_time=1.0,
-                    reference_signal=50,
-                    proportional_gain=proportional_gain,
-                    integral_gain=integral_gain,
-                ),
-            ),
-            ItemType.IRON_WIRE: ProcessConfig(
-                queue_capacity=100,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_WIRE,
-                    consumption_time=1.0,
-                    reference_signal=50,
-                    proportional_gain=proportional_gain,
-                    integral_gain=integral_gain,
+                    count=1, 
+                    input=ItemType.IRON_ROD, 
+                    consumption_time=1.0, 
                 ),
             ),
         }
@@ -882,13 +937,16 @@ def main() -> None:
         # sim_scenarios.get_starvation,
         # sim_scenarios.get_backpressure_propagation,
         # sim_scenarios.get_atomic_second_order_system,
+        # sim_scenarios.get_p_control_sequential_three_processes,
+        # sim_scenarios.get_pi_control_sequential_three_processes,
+        sim_scenarios.get_p_control_with_delay_sequential_three_processes,
         # sim_scenarios.get_sequential_higher_order_system_three_processes,
         # sim_scenarios.get_sequential_higher_order_system_four_processes,
         # sim_scenarios.get_sequential_higher_order_system_five_processes,
         # sim_scenarios.get_a_single_oscillation,
-        sim_scenarios.get_multiple_oscillations_input_f,
-        sim_scenarios.get_multiple_oscillations_output_f,
-        sim_scenarios.get_multiple_oscillations_dual_f,
+        # sim_scenarios.get_multiple_oscillations_input_f,
+        # sim_scenarios.get_multiple_oscillations_output_f,
+        # sim_scenarios.get_multiple_oscillations_dual_f,
     ]:
 
         sim_config, stability_config = scenario()
