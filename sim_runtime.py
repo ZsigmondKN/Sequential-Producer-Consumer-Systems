@@ -885,7 +885,7 @@ def create_sim_config(proportional_gain: float = None, integral_gain: float = No
         queue_interval=1.0,
         use_feedback=True,
         feedback_type = FeedbackType.OUTPUT,
-        processes={
+processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
                 producer=ProducerConfig(
@@ -895,25 +895,48 @@ def create_sim_config(proportional_gain: float = None, integral_gain: float = No
                     reference_signal=50,
                     proportional_gain=proportional_gain,
                     integral_gain=integral_gain,
-                    transport_lag=transport_lag
                 ),
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_INGOT,
                     output=ItemType.IRON_ROD,
-                    consumption_time=0.5,
+                    consumption_time=1.0,
                     reference_signal=50, 
                     proportional_gain=proportional_gain,
                     integral_gain=integral_gain,
-                    transport_lag=transport_lag
                 ),
             ),
             ItemType.IRON_ROD: ProcessConfig(
                 queue_capacity=100,
                 consumer=ConsumerConfig(
-                    count=1, 
-                    input=ItemType.IRON_ROD, 
-                    consumption_time=1.0, 
+                    count=1,
+                    input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=proportional_gain,
+                    integral_gain=integral_gain,
+                ),
+            ),
+            ItemType.IRON_WIRE: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_WIRE,
+                    output=ItemType.IRON_MESH,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=proportional_gain,
+                    integral_gain=integral_gain,
+                ),
+            ),
+            ItemType.IRON_MESH: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_MESH,
+                    consumption_time=1.0,
+                    reference_signal=50,
                 ),
             ),
         }
@@ -940,8 +963,8 @@ def main() -> None:
     shocks = [
         ShockEvent(
             item_type=ItemType.IRON_ROD,
-            start_time=200,
-            end_time=250
+            start_time=300,
+            end_time=400
         )
     ]
     for scenario in [
@@ -949,15 +972,27 @@ def main() -> None:
         # sim_scenarios.get_bottleneck,
         # sim_scenarios.get_starvation,
         # sim_scenarios.get_backpressure_propagation,
-        # sim_scenarios.get_atomic_second_order_system,
-        sim_scenarios.get_p_control_sequential_three_processes,
-        sim_scenarios.get_pi_control_sequential_three_processes_1,
-        sim_scenarios.get_pi_control_sequential_three_processes_2,
-        sim_scenarios.get_p_control_with_delay_sequential_three_processes,
-        sim_scenarios.get_pi_control_with_delay_sequential_three_processes,
-        # sim_scenarios.get_sequential_higher_order_system_three_processes,
-        # sim_scenarios.get_sequential_higher_order_system_four_processes,
-        # sim_scenarios.get_sequential_higher_order_system_five_processes,
+
+        # sim_scenarios.get_atomic_second_order_system_imbalanced,
+        # sim_scenarios.get_p_control_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
+        # sim_scenarios.get_p_control_with_delay_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_pi_control_with_delay_sequential_three_processes_imbalanced,
+
+        # sim_scenarios.get_pi_control_with_delay_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_input_pi_control_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_dual_pi_control_sequential_three_processes_imbalanced,        
+
+        # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
+        # sim_scenarios.get_pi_control_sequential_four_processes_balanced,
+        # sim_scenarios.get_pi_control_sequential_five_processes_balanced,
+        # sim_scenarios.get_pi_control_with_delay_sequential_three_processes_balanced,
+        # sim_scenarios.get_pi_control_with_delay_sequential_four_processes_balanced,
+        # sim_scenarios.get_pi_control_with_delay_sequential_five_processes_balanced,
+
+        sim_scenarios.get_pi_control_sequential_three_processes_balanced,
+
         # sim_scenarios.get_a_single_oscillation,
         # sim_scenarios.get_multiple_oscillations_input_f,
         # sim_scenarios.get_multiple_oscillations_output_f,
@@ -966,17 +1001,17 @@ def main() -> None:
 
         sim_config, stability_config = scenario()
 
-        run_individual(sim_config)
+        run_individual(sim_config, shocks)
 
         # logging.info(
         #     f"Running {len(stability_config.get("x_values")) * len(stability_config.get("y_values"))} stability experiments..."
         # )
 
-        run_stability_experiment(
-            sim_config,
-            stability_config,
-            debug=True
-        )
+        # run_stability_experiment(
+        #     sim_config,
+        #     stability_config,
+        #     debug=True
+        # )
 
 if __name__ == '__main__':
     main()
