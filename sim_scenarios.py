@@ -253,7 +253,7 @@ def get_p_control_sequential_three_processes() -> tuple[SimConfig, dict]:
 
     return sim_config, stability_config
 
-def get_pi_control_sequential_three_processes() -> tuple[SimConfig, dict]:
+def get_pi_control_sequential_three_processes_1() -> tuple[SimConfig, dict]:
     stability_config = {
         "mode": "global",
         "x_param": "global_proportional_gain",
@@ -302,6 +302,55 @@ def get_pi_control_sequential_three_processes() -> tuple[SimConfig, dict]:
 
     return sim_config, stability_config
 
+def get_pi_control_sequential_three_processes_2() -> tuple[SimConfig, dict]:
+    stability_config = {
+        "mode": "global",
+        "x_param": "global_proportional_gain",
+        "y_param": "global_integral_gain",
+        "x_values": np.linspace(0.0, 1.0, 25),
+        "y_values": np.linspace(0.0, 0.1, 25),
+    }
+    local_p_gain = 0.2628
+    local_i_gain = 0.0252
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=1000,
+        queue_interval=1.0,
+        use_feedback=True,
+        feedback_type = FeedbackType.OUTPUT,
+        processes={
+            ItemType.IRON_INGOT: ProcessConfig(
+                queue_capacity=100,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_ROD,
+                    consumption_time=1.0,
+                    reference_signal=50, 
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                ),
+            ),
+            ItemType.IRON_ROD: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1, 
+                    input=ItemType.IRON_ROD, 
+                    consumption_time=1.0, 
+                ),
+            ),
+        }
+    )
+
+    return sim_config, stability_config
+
 def get_p_control_with_delay_sequential_three_processes() -> tuple[SimConfig, dict]:
     stability_config = {
         "mode": "global",
@@ -310,8 +359,8 @@ def get_p_control_with_delay_sequential_three_processes() -> tuple[SimConfig, di
         "x_values": np.linspace(0.0, 5.0, 25),
         "y_values": np.linspace(1, 100, 25),
     }
-    local_p_gain = 1.1
-    local_t_lag = 17.5000000
+    local_p_gain = 0.85
+    local_t_lag = 50
     sim_config = SimConfig(
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
@@ -335,6 +384,58 @@ def get_p_control_with_delay_sequential_three_processes() -> tuple[SimConfig, di
                     consumption_time=0.5,
                     reference_signal=50, 
                     proportional_gain=local_p_gain,
+                    transport_lag=local_t_lag
+                ),
+            ),
+            ItemType.IRON_ROD: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1, 
+                    input=ItemType.IRON_ROD, 
+                    consumption_time=1.0, 
+                ),
+            ),
+        }
+    )
+
+    return sim_config, stability_config
+
+def get_pi_control_with_delay_sequential_three_processes() -> tuple[SimConfig, dict]:
+    stability_config = {
+        "mode": "global",
+        "x_param": "global_proportional_gain",
+        "y_param": "global_transport_lag",
+        "x_values": np.linspace(0.0, 20.0, 25),
+        "y_values": np.linspace(1, 100, 25),
+    }
+    local_p_gain = 1.2576455
+    local_i_gain = 0.0006293
+    local_t_lag = 26.1150727
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=1000,
+        queue_interval=1.0,
+        use_feedback=True,
+        feedback_type = FeedbackType.OUTPUT,
+        processes={
+            ItemType.IRON_INGOT: ProcessConfig(
+                queue_capacity=100,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                    transport_lag=local_t_lag
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_ROD,
+                    consumption_time=0.5,
+                    reference_signal=50, 
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
                     transport_lag=local_t_lag
                 ),
             ),

@@ -461,11 +461,15 @@ def run_simulation(sim_config: SimConfig, shocks=None) -> SimulationState:
 # ==================================================================================================
 
 def objective(trial):
-    test_proportional_gain = trial.suggest_float('proportional_gain', 0, 1)
+    test_proportional_gain = trial.suggest_float('proportional_gain', 0, 5)
     test_integral_gain = trial.suggest_float('integral_gain', 0, 1)
     test_transport_lag = trial.suggest_float('transport_lag', 0, 100)
 
-    sim_config = create_sim_config(test_proportional_gain, test_transport_lag)
+    sim_config = create_sim_config(
+        test_proportional_gain, 
+        test_integral_gain,
+        test_transport_lag
+    )
     sim_state = run_simulation(sim_config)
 
     warmup_cutoff = sim_config.simulation_timeout_in_seconds * 0.3
@@ -601,9 +605,9 @@ def run_parametrized_simulation(base_config, x, y, stability_config):
     return sim_state, sim_config
 
 def rerun_point(base_config, x_values, y_values, idx, stability_config):
-    i, j = idx
-    x = x_values[i]
-    y = y_values[j]
+    y_idx, x_idx = idx
+    x = x_values[x_idx]
+    y = y_values[y_idx]
 
     sim_state, _ = run_parametrized_simulation(base_config, x, y, stability_config)
 
@@ -647,10 +651,10 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
             extent=extent
         )
 
-        i, j = max_point[1]
+        y_idx, x_idx = max_point[1]
 
-        x_center = x_values[j]
-        y_center = y_values[i]
+        x_center = x_values[x_idx]
+        y_center = y_values[y_idx]
 
         logging.info(f"x_center = {x_center:.7f}, y_center = {y_center:.7f}")
 
@@ -729,18 +733,18 @@ def run_stability_experiment(base_config: SimConfig, stability_config: dict, deb
                 diff_score += diff
                 drift_score += drift
 
-            std_matrix[i, j] = std_score
-            diff_matrix[i, j] = diff_score
-            drift_matrix[i, j] = drift_score
+            std_matrix[j, i] = std_score
+            diff_matrix[j, i] = diff_score
+            drift_matrix[j, i] = drift_score
 
             if std_score > max_std[0]:
-                max_std = (std_score, (i, j))
+                max_std = (std_score, (j, i))  # (y_index, x_index)
 
             if diff_score > max_diff[0]:
-                max_diff = (diff_score, (i, j))
+                max_diff = (diff_score, (j, i))
 
             if drift_score > max_drift[0]:
-                max_drift = (drift_score, (i, j))
+                max_drift = (drift_score, (j, i))
 
     logging.info("\n--- Stability Experiment Finished ---")
     logging.info(
@@ -832,18 +836,25 @@ def run_optuna() -> None:
     
     study.optimize(objective, n_trials=500)
 
-    contour_plot = vis.plot_contour(study, params=['proportional_gain', 'integral_gain'])
+    contour_plot = vis.plot_contour(study, params=['proportional_gain', 'transport_lag'])
     contour_plot.show()
 
     best_proportional_gain = study.best_params['proportional_gain']
     best_integral_gain = study.best_params['integral_gain']
+    best_transport_lag = study.best_params['transport_lag']
 
     logging.info("\n--- Optimization Finished ---")
-    logging.info(f"Best Oscillation Score: {study.best_value:.2f}")
-    logging.info(f"best_proportional_gain = {best_proportional_gain:.7f}, best_integral_gain = {best_integral_gain:.7f}")
+    logging.info(f"best_proportional_gain = {best_proportional_gain:.7f}, " +
+                 f"best_integral_gain = {best_integral_gain:.7f}, " + 
+                 f"best_transport_lag = {best_transport_lag:.7f}, "
+                 )
     logging.info("\nRunning final simulation with the best parameters")
 
-    best_sim_config = create_sim_config(best_proportional_gain, best_integral_gain)
+    best_sim_config = create_sim_config(
+        best_proportional_gain,
+        best_integral_gain,
+        best_transport_lag
+    )
     best_sim_state = run_simulation(best_sim_config)
 
     log_simulation_parameters(best_sim_config)
@@ -868,7 +879,7 @@ def run_individual(sim_config: SimConfig, shocks=None) -> None:
 # Sim Config Population
 # ==================================================================================================
 
-def create_sim_config(proportional_gain: float, integral_gain: float) -> SimConfig:
+def create_sim_config(proportional_gain: float = None, integral_gain: float = None, transport_lag: float = None) -> SimConfig:
     return SimConfig(
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
@@ -883,7 +894,8 @@ def create_sim_config(proportional_gain: float, integral_gain: float) -> SimConf
                     production_time=1.0,
                     reference_signal=50,
                     proportional_gain=proportional_gain,
-                    transport_lag=integral_gain
+                    integral_gain=integral_gain,
+                    transport_lag=transport_lag
                 ),
                 consumer=ConsumerConfig(
                     count=1,
@@ -892,7 +904,8 @@ def create_sim_config(proportional_gain: float, integral_gain: float) -> SimConf
                     consumption_time=0.5,
                     reference_signal=50, 
                     proportional_gain=proportional_gain,
-                    transport_lag=integral_gain
+                    integral_gain=integral_gain,
+                    transport_lag=transport_lag
                 ),
             ),
             ItemType.IRON_ROD: ProcessConfig(
@@ -937,9 +950,11 @@ def main() -> None:
         # sim_scenarios.get_starvation,
         # sim_scenarios.get_backpressure_propagation,
         # sim_scenarios.get_atomic_second_order_system,
-        # sim_scenarios.get_p_control_sequential_three_processes,
-        # sim_scenarios.get_pi_control_sequential_three_processes,
+        sim_scenarios.get_p_control_sequential_three_processes,
+        sim_scenarios.get_pi_control_sequential_three_processes_1,
+        sim_scenarios.get_pi_control_sequential_three_processes_2,
         sim_scenarios.get_p_control_with_delay_sequential_three_processes,
+        sim_scenarios.get_pi_control_with_delay_sequential_three_processes,
         # sim_scenarios.get_sequential_higher_order_system_three_processes,
         # sim_scenarios.get_sequential_higher_order_system_four_processes,
         # sim_scenarios.get_sequential_higher_order_system_five_processes,
