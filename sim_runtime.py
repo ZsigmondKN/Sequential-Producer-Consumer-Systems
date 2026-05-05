@@ -649,8 +649,8 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
 
         i, j = max_point[1]
 
-        x_center = x_values[i]
-        y_center = y_values[j]
+        x_center = x_values[j]
+        y_center = y_values[i]
 
         logging.info(f"x_center = {x_center:.7f}, y_center = {y_center:.7f}")
 
