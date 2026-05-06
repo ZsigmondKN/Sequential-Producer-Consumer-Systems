@@ -2,7 +2,7 @@
 
 ![Sequentially composed dynamics example](docs//images/example_1.png)
 ## Overview
-A discrete event simulation tool used to simulate sequential composed producer–consumer systems. The internal dynamics of the simulation are recorded and expressed as diagrams of throughput and queue occupancy. The simulator is used to understand the effect of the composition of such systems under different conditions exploring sequence length, feedback type and external shocks.
+A discrete event simulation tool used to simulate sequential composed producer–consumer systems. The internal dynamics of the simulation are recorded and expressed as diagrams of throughput and queue occupancy. The simulator is used to understand the effect of the composition of such systems under different conditions exploring sequence length, feedback type and external failures.
 
 ## Tech Stack
 - Python 3  

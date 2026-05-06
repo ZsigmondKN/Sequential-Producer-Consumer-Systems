@@ -55,7 +55,7 @@ def consumer(state: ConsumerState, simulation_state: SimulationState, sim_config
     output_type = process.consumer.output
     base_consumption_time = process.consumer.consumption_time
 
-    if is_machine_failed(state.item_type, sim_time, simulation_state):
+    if has_machine_failed(state.item_type, sim_time, simulation_state):
         return
 
     # abort if not ready or nothing to consume
@@ -289,7 +289,7 @@ def plot_producer_consumer_rates(ax: plt.Axes, start_time: float, producer_logs:
         else:
             throughput = cons_counts
         
-        ax.plot(bin_centres, throughput, "--", markersize=4, alpha=0.9, label=f"Throughput: {item}")
+        ax.plot(bin_centres, throughput, "--", markersize=4, alpha=0.9, label=item)
     
     ax.set(
         xlabel="Time (seconds)",
@@ -299,7 +299,7 @@ def plot_producer_consumer_rates(ax: plt.Axes, start_time: float, producer_logs:
     ax.grid(alpha=0.4, linestyle=":")
     ax.legend()
 
-def plot_queue_occupancy_over_time(ax: plt.Axes, start_time: float, queue_logs: list[QueueLogs], shocks=None) -> None:
+def plot_queue_occupancy_over_time(ax: plt.Axes, start_time: float, queue_logs: list[QueueLogs], failures=None, surges=None) -> None:
     queues: dict[str, list[QueueLogs]] = {}
 
     for log in queue_logs:
@@ -315,11 +315,18 @@ def plot_queue_occupancy_over_time(ax: plt.Axes, start_time: float, queue_logs: 
         line, = ax.plot(time_steps, queue_usages, label=queue_name)
         ax.fill_between(time_steps, queue_usages, alpha=0.15, color=line.get_color())
 
-    if shocks:
-        for shock in shocks:
-            ax.axvline(shock.start_time, linestyle="--", color="red", alpha=0.8)
-            ax.axvline(shock.end_time, linestyle="--", color="red", alpha=0.8)
-            ax.axvspan(shock.start_time, shock.end_time, color="red", alpha=0.15, label="Shock")
+    if failures:
+        for failure in failures:
+            ax.axvline(failure.start_time, linestyle="--", color="red", alpha=0.8)
+            ax.axvline(failure.end_time, linestyle="--", color="red", alpha=0.8)
+            ax.axvspan(failure.start_time, failure.end_time, color="red", alpha=0.15, label="Failure")
+    
+    surge_label_added = False
+    if surges:
+        for surge in surges:
+            ax.axvline(surge.trigger_time, linestyle="--", color="black", alpha=0.4, linewidth=1,
+                label="Surge" if not surge_label_added else "")
+            surge_label_added = True
     ax.set(
         xlabel="Time (seconds)",
         ylabel="Queue occupancy",
@@ -328,14 +335,15 @@ def plot_queue_occupancy_over_time(ax: plt.Axes, start_time: float, queue_logs: 
     ax.grid(alpha=0.4, linestyle=":")
     ax.legend()
 
-def plot_results(simulation_state: SimulationState, start_time: float = 0.0, shocks=None) -> None:
+def plot_results(simulation_state: SimulationState, start_time: float = 0.0, failures=None, surges=None) -> None:
     """Create one figure containing subplots."""
     fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(8, 6))
 
     plot_producer_consumer_rates(ax1, start_time, simulation_state.producer_logs, simulation_state.consumer_logs)
-    plot_queue_occupancy_over_time(ax2, start_time, simulation_state.queue_logs, shocks)
+    plot_queue_occupancy_over_time(ax2, start_time, simulation_state.queue_logs, failures, surges)
 
     plt.tight_layout()
+    plt.subplots_adjust(hspace=0.45)
     plt.show()
 
 # ==================================================================================================
@@ -358,7 +366,8 @@ def create_simulation_state(sim_config: SimConfig) -> SimulationState:
         queues=queues,
         queue_history=queue_history,
         pending_outputs=[],
-        shocks=[]
+        failures=[],
+        surges=[]
     )
 
 def create_producer_consumer_states(sim_config: SimConfig) -> tuple[list[ProducerState], list[ConsumerState]]:
@@ -374,10 +383,11 @@ def create_producer_consumer_states(sim_config: SimConfig) -> tuple[list[Produce
 
     return producers, consumers
 
-def run_simulation(sim_config: SimConfig, shocks=None) -> SimulationState:
+def run_simulation(sim_config: SimConfig, failures=None, surges=None) -> SimulationState:
     """Run the simulation as event-driven, with the data defined in the provided sim_config dataclass """
     simulation_state = create_simulation_state(sim_config)
-    simulation_state.shocks = shocks if shocks is not None else []
+    simulation_state.failures = failures if failures is not None else []
+    simulation_state.surges = surges if surges is not None else []
     producers_state, consumers_state = create_producer_consumer_states(sim_config)
     sim_time = 0.0
     duration = sim_config.simulation_timeout_in_seconds
@@ -397,6 +407,8 @@ def run_simulation(sim_config: SimConfig, shocks=None) -> SimulationState:
             simulation_state.queue_history[item].append((timestamp, simulation_state.queues[item]))
 
         simulation_state.pending_outputs = [p for p in simulation_state.pending_outputs if p[0] > sim_time]
+
+        apply_surges(simulation_state, sim_config, sim_time)
 
         # execute all ready processes
         for state in processes:
@@ -631,6 +643,12 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
         "Maximum Drift"
     ]
 
+    parameter_labeld = {
+    "global_proportional_gain": "Proportional Gain (Kp)",
+    "global_integral_gain": "Integral Gain (Ki)",
+    "global_transport_lag": "Transport Lag (L)",
+}
+
     matrices = [std_matrix, diff_matrix, drift_matrix]
     max_points = [max_std, max_diff, max_drift]
 
@@ -661,9 +679,12 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
         ax.plot(x_center, y_center, 'ro', label='Maximum instability')
         ax.legend()
 
+        x_param = stability_config["x_param"]
+        y_param = stability_config["y_param"]
+
         ax.set_title(map_title)
-        ax.set_xlabel(stability_config["x_param"])
-        ax.set_ylabel(stability_config["y_param"])
+        ax.set_xlabel(parameter_labeld.get(x_param, x_param))
+        ax.set_ylabel(parameter_labeld.get(y_param, y_param))
         fig.colorbar(im, ax=ax)
 
     for ax, max_point, sim_title in zip(bottom_axes, max_points, sim_titles):
@@ -673,8 +694,8 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
 
         ax.set_title(sim_title)
 
-    plt.suptitle(f"System Stability Breakdown – {feedback_type.name.title()}")
     plt.tight_layout()
+    plt.subplots_adjust(hspace=0.3)
     plt.show()
 
 def plot_stability_heatmap(sensitivities, delays, matrix, feedback_type):
@@ -861,11 +882,11 @@ def run_optuna() -> None:
     log_results(best_sim_state)
     plot_results(best_sim_state)
 
-def run_individual(sim_config: SimConfig, shocks=None) -> None:
-    sim_state = run_simulation(sim_config, shocks)
+def run_individual(sim_config: SimConfig, failures=None, surges=None) -> None:
+    sim_state = run_simulation(sim_config, failures, surges)
     log_simulation_parameters(sim_config)
     log_results(sim_state)
-    plot_results(sim_state, shocks=shocks)
+    plot_results(sim_state, failures=failures, surges=surges)
 
     # damping_results = compute_scenario_damping(sim_config, sim_state)
     # logging.info("\n--- Damping Ratio Estimation (Log Decrement) ---")
@@ -942,12 +963,31 @@ processes={
         }
     )
 
-def is_machine_failed(item_type: ItemType, sim_time: float, simulation_state: SimulationState) -> bool:
-    for shock in simulation_state.shocks:
-        if shock.item_type == item_type:
-            if shock.start_time <= sim_time <= shock.end_time:
+def has_machine_failed(item_type: ItemType, sim_time: float, simulation_state: SimulationState) -> bool:
+    for failure in simulation_state.failures:
+        if failure.item_type == item_type:
+            if failure.start_time <= sim_time <= failure.end_time:
                 return True
     return False
+
+def apply_surges(simulation_state: SimulationState, sim_config: SimConfig, sim_time: float):
+    for surge in simulation_state.surges:
+        if math.isclose(sim_time, surge.trigger_time, abs_tol=1e-6):
+            item = surge.item_type
+
+            capacity = sim_config.processes[item].queue_capacity
+            current = simulation_state.queues[item]
+
+            if surge.fill_to_capacity:
+                new_value = capacity
+            else:
+                new_value = min(capacity, current + (surge.amount or 0))
+
+            simulation_state.queues[item] = new_value
+
+            simulation_state.queue_history[item].append((sim_time, new_value))
+
+            logging.info(f"SURGE applied to {item} at t={sim_time}")
 
 # ==================================================================================================
 # Main function
@@ -960,29 +1000,36 @@ def main() -> None:
     # run_optuna()
 
     # ======== Individual Scenarios ========
-    shocks = [
-        ShockEvent(
-            item_type=ItemType.IRON_ROD,
+    failures = [
+        FailureEvent(
+            item_type=ItemType.IRON_INGOT,
             start_time=300,
-            end_time=400
+            end_time=350
         )
     ]
+    surges = [
+        SurgeEvent(
+            # item_type=ItemType.IRON_INGOT,
+            item_type=ItemType.IRON_ROD,
+            trigger_time=400
+        )
+    ]
+    
     for scenario in [
         # sim_scenarios.get_balanced_flow,
         # sim_scenarios.get_bottleneck,
         # sim_scenarios.get_starvation,
         # sim_scenarios.get_backpressure_propagation,
 
-        # sim_scenarios.get_atomic_second_order_system_imbalanced,
-        # sim_scenarios.get_p_control_sequential_three_processes_imbalanced,
-        # sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
+        sim_scenarios.get_atomic_second_order_system_imbalanced,
+        sim_scenarios.get_p_control_sequential_three_processes_imbalanced,
+        sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
         # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
         # sim_scenarios.get_p_control_with_delay_sequential_three_processes_imbalanced,
         # sim_scenarios.get_pi_control_with_delay_sequential_three_processes_imbalanced,
 
-        # sim_scenarios.get_pi_control_with_delay_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
         # sim_scenarios.get_input_pi_control_sequential_three_processes_imbalanced,
-        # sim_scenarios.get_dual_pi_control_sequential_three_processes_imbalanced,        
 
         # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
         # sim_scenarios.get_pi_control_sequential_four_processes_balanced,
@@ -991,7 +1038,14 @@ def main() -> None:
         # sim_scenarios.get_pi_control_with_delay_sequential_four_processes_balanced,
         # sim_scenarios.get_pi_control_with_delay_sequential_five_processes_balanced,
 
-        sim_scenarios.get_pi_control_sequential_three_processes_balanced,
+        # Scenarios to which failure is applied
+        # sim_scenarios.get_atomic_second_order_system_imbalanced,
+        # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
+
+        # Scenarios to which surge is applied
+        # sim_scenarios.get_atomic_second_order_system_imbalanced,
+        # sim_scenarios.get_pi_control_sequential_four_processes_balanced,
+
 
         # sim_scenarios.get_a_single_oscillation,
         # sim_scenarios.get_multiple_oscillations_input_f,
@@ -1001,17 +1055,17 @@ def main() -> None:
 
         sim_config, stability_config = scenario()
 
-        run_individual(sim_config, shocks)
+        run_individual(sim_config)
 
         # logging.info(
         #     f"Running {len(stability_config.get("x_values")) * len(stability_config.get("y_values"))} stability experiments..."
         # )
 
-        # run_stability_experiment(
-        #     sim_config,
-        #     stability_config,
-        #     debug=True
-        # )
+        run_stability_experiment(
+            sim_config,
+            stability_config,
+            debug=True
+        )
 
 if __name__ == '__main__':
     main()

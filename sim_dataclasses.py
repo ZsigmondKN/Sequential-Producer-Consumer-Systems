@@ -18,10 +18,17 @@ class FeedbackType(Enum):
     DUAL = "dual_queue"
 
 @dataclass
-class ShockEvent:
+class FailureEvent:
     item_type: ItemType
     start_time: float
     end_time: float
+
+@dataclass
+class SurgeEvent:
+    item_type: ItemType
+    trigger_time: float
+    fill_to_capacity: bool = True
+    amount: int | None = None
 
 @dataclass
 class SimulationState:
@@ -31,7 +38,8 @@ class SimulationState:
     queues: dict[ItemType, int]
     queue_history: dict[ItemType, list[tuple[float, int]]]
     pending_outputs: list[tuple[float, ItemType]]
-    shocks: list[ShockEvent]
+    failures: list[FailureEvent]
+    surges: list[SurgeEvent]
 
 @dataclass
 class ProducerState:
