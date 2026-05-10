@@ -2,7 +2,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 
 # ==================================================================================================
-# Simulation data structures
+# Simulation enums
 # ==================================================================================================
 
 class ItemType(Enum):
@@ -17,6 +17,10 @@ class FeedbackType(Enum):
     INPUT = "input_queue"
     DUAL = "dual_queue"
 
+# ==================================================================================================
+# Simulation event definitions
+# ==================================================================================================
+
 @dataclass
 class FailureEvent:
     item_type: ItemType
@@ -29,6 +33,10 @@ class SurgeEvent:
     trigger_time: float
     fill_to_capacity: bool = True
     amount: int | None = None
+
+# ==================================================================================================
+# Simulation runtime state stores
+# ==================================================================================================
 
 @dataclass
 class SimulationState:
@@ -59,6 +67,10 @@ class ConsumerState:
     last_update_time: float = 0.0
     control_signal: float = 0.0
 
+# ==================================================================================================
+# Simulation runtime state logs
+# ==================================================================================================
+
 @dataclass
 class SimulationLogs:
     process_id: int
@@ -71,6 +83,9 @@ class QueueLogs:
     queue_usage: int
     timestamp: float
 
+# ==================================================================================================
+# Simulaiton architecture schematics
+# ==================================================================================================
 @dataclass(frozen=True)
 class ProducerConfig:
     count: int = 0
