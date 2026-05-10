@@ -12,7 +12,7 @@ class ItemType(Enum):
     IRON_MESH = "Iron Mesh"
     IRON_FILTER = "Iron Filter"
 
-class FeedbackType(Enum):
+class FeedbackDirection(Enum):
     OUTPUT = "output_queue"
     INPUT = "input_queue"
     DUAL = "dual_queue"
@@ -120,6 +120,6 @@ class SimConfig:
     simulation_timeout_in_seconds: int
     queue_interval: float
     use_feedback: bool
-    feedback_type: FeedbackType
+    feedback_direction: FeedbackDirection
     processes: dict[ItemType, ProcessConfig]
     initial_queue_occupancy: dict[ItemType, int] = field(default_factory=dict)

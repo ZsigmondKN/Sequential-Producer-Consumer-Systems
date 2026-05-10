@@ -157,17 +157,17 @@ def get_feedback_signal(simulation_state, sim_config, config, control_time):
     input_q = getattr(config, "input", None)
     output_q = getattr(config, "output", None)
 
-    if sim_config.feedback_type == FeedbackType.INPUT:
+    if sim_config.feedback_direction == FeedbackDirection.INPUT:
         if input_q is None:
             return None
         observed = [input_q]
 
-    elif sim_config.feedback_type == FeedbackType.OUTPUT:
+    elif sim_config.feedback_direction == FeedbackDirection.OUTPUT:
         if output_q is None:
             return None
         observed = [output_q]
 
-    elif sim_config.feedback_type == FeedbackType.DUAL:
+    elif sim_config.feedback_direction == FeedbackDirection.DUAL:
         if input_q is None or output_q is None:
             return None
         observed = [input_q, output_q]
@@ -626,7 +626,7 @@ def rerun_point(base_config, x_values, y_values, idx, stability_config):
     return sim_state, x, y
 
 def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_matrix, drift_matrix, 
-                           max_std, max_diff, max_drift, feedback_type, stability_config):
+                           max_std, max_diff, max_drift, stability_config):
     fig, axes = plt.subplots(2, 3, figsize=(14, 8))
     top_axes = axes[0]
     bottom_axes = axes[1]
@@ -698,7 +698,7 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
     plt.subplots_adjust(hspace=0.3)
     plt.show()
 
-def plot_stability_heatmap(sensitivities, delays, matrix, feedback_type):
+def plot_stability_heatmap(sensitivities, delays, matrix, feedback_direction):
     plt.figure(figsize=(8,6))
     plt.imshow(
         matrix,
@@ -710,7 +710,7 @@ def plot_stability_heatmap(sensitivities, delays, matrix, feedback_type):
 
     plt.xlabel("Feedback Delay")
     plt.ylabel("Reaction Sensitivity")
-    plt.title(f"System Stability – {feedback_type.name.title()} Feedback")
+    plt.title(f"System Stability – {feedback_direction.name.title()} Feedback")
 
     plt.show()
 
@@ -777,12 +777,11 @@ def run_stability_experiment(base_config: SimConfig, stability_config: dict, deb
             base_config,
             x_values, y_values,
             std_matrix, diff_matrix, drift_matrix,
-            max_std, max_diff, max_drift,
-            base_config.feedback_type, stability_config
+            max_std, max_diff, max_drift, stability_config
         )
     else:
         plot_stability_heatmap(
-            x_values, y_values, std_matrix, base_config.feedback_type
+            x_values, y_values, std_matrix, base_config.feedback_direction
         )
 
 # ==================================================================================================
@@ -905,7 +904,7 @@ def create_sim_config(proportional_gain: float = None, integral_gain: float = No
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
 processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,

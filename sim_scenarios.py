@@ -3,7 +3,7 @@
 import numpy as np
 
 from sim_dataclasses import (
-    ItemType, SimConfig, ProcessConfig, ProducerConfig, ConsumerConfig, FeedbackType
+    ItemType, SimConfig, ProcessConfig, ProducerConfig, ConsumerConfig, FeedbackDirection
 )
 
 # ==================================================================================================
@@ -16,7 +16,7 @@ def get_balanced_flow() -> tuple[SimConfig, None]:
         simulation_timeout_in_seconds=60,
         queue_interval=1.0,
         use_feedback=False,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=10,  
@@ -51,7 +51,7 @@ def get_bottleneck() -> tuple[SimConfig, None]:
         simulation_timeout_in_seconds=60,
         queue_interval=1.0,
         use_feedback=False,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=10,  
@@ -85,7 +85,7 @@ def get_starvation() -> tuple[SimConfig, None]:
         simulation_timeout_in_seconds=60,
         queue_interval=1.0,
         use_feedback=False,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         initial_queue_occupancy={
             ItemType.IRON_INGOT: 10,
         },
@@ -122,7 +122,7 @@ def get_backpressure_propagation() -> tuple[SimConfig, None]:
         simulation_timeout_in_seconds=60,
         queue_interval=1.0,
         use_feedback=False,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=10,  
@@ -177,7 +177,7 @@ def get_atomic_second_order_system_imbalanced() -> tuple[SimConfig, dict]:
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -218,7 +218,7 @@ def get_p_control_sequential_three_processes_imbalanced() -> tuple[SimConfig, di
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -267,7 +267,7 @@ def get_pi_control_sequential_three_processes_imbalanced() -> tuple[SimConfig, d
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -316,7 +316,7 @@ def get_pi_control_sequential_three_processes_balanced() -> tuple[SimConfig, dic
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -365,7 +365,7 @@ def get_p_control_with_delay_sequential_three_processes_imbalanced() -> tuple[Si
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -415,7 +415,7 @@ def get_pi_control_with_delay_sequential_three_processes_imbalanced() -> tuple[S
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -470,7 +470,7 @@ def get_input_pi_control_sequential_three_processes_imbalanced() -> tuple[SimCon
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.INPUT,
+        feedback_direction = FeedbackDirection.INPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,  
@@ -520,7 +520,7 @@ def get_dual_pi_control_sequential_three_processes_imbalanced() -> tuple[SimConf
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.DUAL,
+        feedback_direction = FeedbackDirection.DUAL,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,  
@@ -574,7 +574,7 @@ def get_pi_control_sequential_four_processes_balanced() -> tuple[SimConfig, dict
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -638,7 +638,7 @@ def get_pi_control_sequential_five_processes_balanced() -> tuple[SimConfig, dict
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -715,7 +715,7 @@ def get_multiple_oscillations_output_f() -> tuple[dict, SimConfig]:
         simulation_timeout_in_seconds=800,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,  
@@ -783,7 +783,7 @@ def get_multiple_oscillations_dual_f() -> tuple[SimConfig, dict]:
         simulation_timeout_in_seconds=800,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type=FeedbackType.DUAL,
+        feedback_direction=FeedbackDirection.DUAL,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -846,7 +846,7 @@ def get_multiple_oscillations_input_f() -> tuple[SimConfig, dict]:
         simulation_timeout_in_seconds=500,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type=FeedbackType.INPUT,
+        feedback_direction=FeedbackDirection.INPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=100,
@@ -903,7 +903,7 @@ def get_a_single_oscillation() -> tuple[SimConfig, None]:
         simulation_timeout_in_seconds=500,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=200,
@@ -932,7 +932,7 @@ def get_smooth_waves() -> tuple[SimConfig, None]:
         simulation_timeout_in_seconds=250,
         queue_interval=1.0,
         use_feedback=True,
-        feedback_type = FeedbackType.OUTPUT,
+        feedback_direction = FeedbackDirection.OUTPUT,
         processes={
             ItemType.IRON_INGOT: ProcessConfig(
                 queue_capacity=250,  
