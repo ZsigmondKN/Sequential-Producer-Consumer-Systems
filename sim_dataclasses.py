@@ -55,7 +55,7 @@ class ProducerState:
     item_type: ItemType
     next_ready_time: float = 0.0
     error_integral: float = 0.0
-    last_update_time: float = 0.0
+    last_pi_sample_time: float = 0.0
     control_signal: float = 0.0
 
 @dataclass
@@ -64,7 +64,7 @@ class ConsumerState:
     item_type: ItemType
     next_ready_time: float = 0.0
     error_integral: float = 0.0
-    last_update_time: float = 0.0
+    last_pi_sample_time: float = 0.0
     control_signal: float = 0.0
 
 # ==================================================================================================

@@ -205,7 +205,7 @@ def update_feedback_controllers(simulation_state, sim_config, processes, control
         if error is None:
             continue
 
-        dt = control_time - state.last_update_time
+        dt = control_time - state.last_pi_sample_time
         if dt <= 0:
             continue
 
@@ -217,7 +217,7 @@ def update_feedback_controllers(simulation_state, sim_config, processes, control
         u_min, u_max = -1, 1
         u = compute_pi_control_signal(state, error, dt, Kp, Ki, u_min, u_max)
         state.control_signal = u
-        state.last_update_time = control_time
+        state.last_pi_sample_time = control_time
 
 # ==================================================================================================
 # Reporting - logs and diagrams
