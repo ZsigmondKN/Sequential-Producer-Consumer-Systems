@@ -84,7 +84,7 @@ class QueueLogs:
     timestamp: float
 
 # ==================================================================================================
-# Simulaiton architecture schematics
+# Simulation architecture schematics
 # ==================================================================================================
 @dataclass(frozen=True)
 class ProducerConfig:
