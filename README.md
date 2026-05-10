@@ -12,7 +12,7 @@ A discrete event simulation tool used to simulate sequential composed producerâ€
 
 ## Key Features
 - Event-driven simulation of multi-stage producerâ€“consumer systems
-- Support for different feedback strategies (input/output/dual)  
+- Support for different feedback strategies (input/output)  
 - Visualisation of throughput and queue dynamics over time
 - System stability diagrams and parameter tuning using Optuna 
 

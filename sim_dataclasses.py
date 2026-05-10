@@ -15,7 +15,6 @@ class ItemType(Enum):
 class FeedbackDirection(Enum):
     OUTPUT = "output_queue"
     INPUT = "input_queue"
-    DUAL = "dual_queue"
 
 # ==================================================================================================
 # Simulation event definitions

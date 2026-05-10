@@ -167,11 +167,6 @@ def get_feedback_signal(simulation_state, sim_config, config, control_time):
             return None
         observed = [output_q]
 
-    elif sim_config.feedback_direction == FeedbackDirection.DUAL:
-        if input_q is None or output_q is None:
-            return None
-        observed = [input_q, output_q]
-
     else:
         return None
 
@@ -1049,7 +1044,6 @@ def main() -> None:
         # sim_scenarios.get_a_single_oscillation,
         # sim_scenarios.get_multiple_oscillations_input_f,
         # sim_scenarios.get_multiple_oscillations_output_f,
-        # sim_scenarios.get_multiple_oscillations_dual_f,
     ]:
 
         sim_config, stability_config = scenario()
