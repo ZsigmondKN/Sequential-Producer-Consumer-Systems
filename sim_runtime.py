@@ -116,7 +116,7 @@ def compute_pi_control_signal(state, error, dt, Kp, Ki, u_min, u_max):
         - e(t)  → error
         - Kp    → proportional_gain
         - Ki    → integral_gain
-        - ∫ e(t) dt → state.error_integral
+        - ∫ e(t) dt = z(t) → state.error_integral
 
     The integral term is accumulated over time in state.error_integral.
     """
