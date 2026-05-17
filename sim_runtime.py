@@ -638,11 +638,11 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
         "Maximum Drift"
     ]
 
-    parameter_labeld = {
-    "global_proportional_gain": "Proportional Gain (Kp)",
-    "global_integral_gain": "Integral Gain (Ki)",
-    "global_transport_delay": "Transport Delay (L)",
-}
+    parameter_labels = {
+        "global_proportional_gain": r"Proportional Gain ($k_p$)",
+        "global_integral_gain": r"Integral Gain ($k_i$)",
+        "global_transport_delay": r"Transport Delay ($\delta$)",
+    }
 
     matrices = [std_matrix, diff_matrix, drift_matrix]
     max_points = [max_std, max_diff, max_drift]
@@ -678,8 +678,8 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
         y_param = stability_config["y_param"]
 
         ax.set_title(map_title)
-        ax.set_xlabel(parameter_labeld.get(x_param, x_param))
-        ax.set_ylabel(parameter_labeld.get(y_param, y_param))
+        ax.set_xlabel(parameter_labels.get(x_param, x_param))
+        ax.set_ylabel(parameter_labels.get(y_param, y_param))
         fig.colorbar(im, ax=ax)
 
     for ax, max_point, sim_title in zip(bottom_axes, max_points, sim_titles):
