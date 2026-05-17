@@ -889,6 +889,7 @@ processes={
                     reference_signal=50,
                     proportional_gain=proportional_gain,
                     integral_gain=integral_gain,
+                    transport_delay=transport_delay,
                 ),
                 consumer=ConsumerConfig(
                     count=1,
@@ -898,6 +899,7 @@ processes={
                     reference_signal=50, 
                     proportional_gain=proportional_gain,
                     integral_gain=integral_gain,
+                    transport_delay=transport_delay,
                 ),
             ),
             ItemType.IRON_ROD: ProcessConfig(
@@ -905,34 +907,13 @@ processes={
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_ROD,
-                    output=ItemType.IRON_WIRE,
                     consumption_time=1.0,
                     reference_signal=50,
                     proportional_gain=proportional_gain,
                     integral_gain=integral_gain,
+                    transport_delay=transport_delay,
                 ),
-            ),
-            ItemType.IRON_WIRE: ProcessConfig(
-                queue_capacity=100,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_WIRE,
-                    output=ItemType.IRON_MESH,
-                    consumption_time=1.0,
-                    reference_signal=50,
-                    proportional_gain=proportional_gain,
-                    integral_gain=integral_gain,
-                ),
-            ),
-            ItemType.IRON_MESH: ProcessConfig(
-                queue_capacity=100,
-                consumer=ConsumerConfig(
-                    count=1,
-                    input=ItemType.IRON_MESH,
-                    consumption_time=1.0,
-                    reference_signal=50,
-                ),
-            ),
+            )
         }
     )
 
@@ -996,17 +977,13 @@ def main() -> None:
         # sim_scenarios.get_backpressure_propagation,
 
         # Experiment - Feedback Types
-        # sim_scenarios.get_atomic_second_order_system_balanced,
-        # sim_scenarios.get_atomic_second_order_system_imbalanced,
-        # sim_scenarios.get_p_control_sequential_three_processes_imbalanced,
-        # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
-        # sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
-        sim_scenarios.get_p_control_with_delay_sequential_three_processes_imbalanced,
-        # sim_scenarios.get_pi_control_with_delay_sequential_three_processes_imbalanced,
+        sim_scenarios.get_atomic_second_order_system_balanced,
+        sim_scenarios.get_pi_control_sequential_three_processes_balanced,
+        sim_scenarios.get_pi_control_with_delay_sequential_three_processes_balanced,
 
         # Experiment - Feedback Direction
-        # sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
-        # sim_scenarios.get_input_pi_control_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
+        # sim_scenarios.get_input_pi_control_sequential_three_processes_balanced,
 
         # Experiment - Feedback Types
         # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
@@ -1023,6 +1000,11 @@ def main() -> None:
         # Experiment - Surge (apply parameter to run_individual)
         # sim_scenarios.get_atomic_second_order_system_balanced,
         # sim_scenarios.get_pi_control_sequential_four_processes_balanced,
+
+        # Experiment - Extra Imbalance
+        # sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_pi_control_with_delay_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_input_pi_control_sequential_three_processes_imbalanced,
     ]:
 
         sim_config, stability_config = scenario()
