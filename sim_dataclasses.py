@@ -93,7 +93,7 @@ class ProducerConfig:
     # PI-Control below
     reference_signal: int | None = None
     proportional_gain: float = 0.0
-    transport_lag: float = 0.0
+    transport_delay: float = 0.0
     integral_gain: float = 0.0
 
 @dataclass(frozen=True)
@@ -105,7 +105,7 @@ class ConsumerConfig:
     # PI-Control below
     reference_signal: int | None = None
     proportional_gain: float = 0.0
-    transport_lag: float = 0.0
+    transport_delay: float = 0.0
     integral_gain: float = 0.0
 
 @dataclass(frozen=True)

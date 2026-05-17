@@ -133,7 +133,7 @@ def compute_pi_control_signal(state, error, dt, Kp, Ki, u_min, u_max):
 
 def get_feedback_signal(simulation_state, sim_config, config, control_time):
     def delayed_queue_value(queue_type):
-        delay = config.transport_lag
+        delay = config.transport_delay
         current_value = simulation_state.queues[queue_type]
 
         if delay is None or delay <= 0:
@@ -234,7 +234,7 @@ def log_simulation_parameters(sim_config: SimConfig) -> None:
                 config_info += (
                     f" | target queue: {process_config.producer.reference_signal}"
                     f" | sensitivity: {process_config.producer.proportional_gain}"
-                    f" | delay: {process_config.producer.transport_lag}"
+                    f" | delay: {process_config.producer.transport_delay}"
                 )
         if process_config.consumer.count > 0:
             config_info += (
@@ -245,7 +245,7 @@ def log_simulation_parameters(sim_config: SimConfig) -> None:
                 config_info += (
                     f" | target queue: {process_config.consumer.reference_signal}"
                     f" | sensitivity: {process_config.consumer.proportional_gain}"
-                    f" | delay: {process_config.consumer.transport_lag}"
+                    f" | delay: {process_config.consumer.transport_delay}"
                 )
         logging.info(config_info)
 
@@ -470,12 +470,12 @@ def run_simulation(sim_config: SimConfig, failures=None, surges=None) -> Simulat
 def objective(trial):
     test_proportional_gain = trial.suggest_float('proportional_gain', 0, 5)
     test_integral_gain = trial.suggest_float('integral_gain', 0, 1)
-    test_transport_lag = trial.suggest_float('transport_lag', 0, 100)
+    test_transport_delay = trial.suggest_float('transport_delay', 0, 100)
 
     sim_config = create_sim_config(
         test_proportional_gain, 
         test_integral_gain,
-        test_transport_lag
+        test_transport_delay
     )
     sim_state = run_simulation(sim_config)
 
@@ -543,11 +543,11 @@ def apply_feedback_params(sim_config: SimConfig, param_dict: dict[str, float]) -
                     "global_integral_gain",
                     producer.integral_gain
                 ),
-                transport_lag=resolve(
+                transport_delay=resolve(
                     param_dict,
                     f"{item_type.name}_producer_delay",
-                    "global_transport_lag",
-                    producer.transport_lag
+                    "global_transport_delay",
+                    producer.transport_delay
                 )
             )
 
@@ -566,11 +566,11 @@ def apply_feedback_params(sim_config: SimConfig, param_dict: dict[str, float]) -
                     "global_integral_gain",
                     consumer.integral_gain
                 ),
-                transport_lag=resolve(
+                transport_delay=resolve(
                     param_dict,
                     f"{item_type.name}_consumer_delay",
-                    "global_transport_lag",
-                    consumer.transport_lag
+                    "global_transport_delay",
+                    consumer.transport_delay
                 )
             )
 
@@ -641,7 +641,7 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
     parameter_labeld = {
     "global_proportional_gain": "Proportional Gain (Kp)",
     "global_integral_gain": "Integral Gain (Ki)",
-    "global_transport_lag": "Transport Lag (L)",
+    "global_transport_delay": "Transport Delay (L)",
 }
 
     matrices = [std_matrix, diff_matrix, drift_matrix]
@@ -693,23 +693,7 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
     plt.subplots_adjust(hspace=0.3)
     plt.show()
 
-def plot_stability_heatmap(sensitivities, delays, matrix, feedback_direction):
-    plt.figure(figsize=(8,6))
-    plt.imshow(
-        matrix,
-        origin='lower',
-        aspect='auto',
-        extent=[delays[0], delays[-1], sensitivities[0], sensitivities[-1]]
-    )
-    plt.colorbar(label="Instability Score")
-
-    plt.xlabel("Feedback Delay")
-    plt.ylabel("Reaction Sensitivity")
-    plt.title(f"System Stability – {feedback_direction.name.title()} Feedback")
-
-    plt.show()
-
-def run_stability_experiment(base_config: SimConfig, stability_config: dict, debug=False):
+def run_stability_experiment(base_config: SimConfig, stability_config: dict):
     x_values = stability_config["x_values"]
     y_values = stability_config["y_values"]
 
@@ -767,17 +751,12 @@ def run_stability_experiment(base_config: SimConfig, stability_config: dict, deb
         f"Grid searched {len(x_values) * len(y_values)} parameter combinations "
         f"({len(x_values)} x-values × {len(y_values)} y-values)")
 
-    if debug:
-        plot_multiple_heatmaps(
-            base_config,
-            x_values, y_values,
-            std_matrix, diff_matrix, drift_matrix,
-            max_std, max_diff, max_drift, stability_config
-        )
-    else:
-        plot_stability_heatmap(
-            x_values, y_values, std_matrix, base_config.feedback_direction
-        )
+    plot_multiple_heatmaps(
+        base_config,
+        x_values, y_values,
+        std_matrix, diff_matrix, drift_matrix,
+        max_std, max_diff, max_drift, stability_config
+    )
 
 # ==================================================================================================
 # Damping Calculations
@@ -851,24 +830,24 @@ def run_optuna() -> None:
     
     study.optimize(objective, n_trials=500)
 
-    contour_plot = vis.plot_contour(study, params=['proportional_gain', 'transport_lag'])
+    contour_plot = vis.plot_contour(study, params=['proportional_gain', 'transport_delay'])
     contour_plot.show()
 
     best_proportional_gain = study.best_params['proportional_gain']
     best_integral_gain = study.best_params['integral_gain']
-    best_transport_lag = study.best_params['transport_lag']
+    best_transport_delay = study.best_params['transport_delay']
 
     logging.info("\n--- Optimization Finished ---")
     logging.info(f"best_proportional_gain = {best_proportional_gain:.7f}, " +
                  f"best_integral_gain = {best_integral_gain:.7f}, " + 
-                 f"best_transport_lag = {best_transport_lag:.7f}, "
+                 f"best_transport_delay = {best_transport_delay:.7f}, "
                  )
     logging.info("\nRunning final simulation with the best parameters")
 
     best_sim_config = create_sim_config(
         best_proportional_gain,
         best_integral_gain,
-        best_transport_lag
+        best_transport_delay
     )
     best_sim_state = run_simulation(best_sim_config)
 
@@ -894,7 +873,7 @@ def run_individual(sim_config: SimConfig, failures=None, surges=None) -> None:
 # Sim Config Population
 # ==================================================================================================
 
-def create_sim_config(proportional_gain: float = None, integral_gain: float = None, transport_lag: float = None) -> SimConfig:
+def create_sim_config(proportional_gain: float = None, integral_gain: float = None, transport_delay: float = None) -> SimConfig:
     return SimConfig(
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
@@ -1010,21 +989,26 @@ def main() -> None:
     ]
     
     for scenario in [
+        # Experiment - Open Loop
         # sim_scenarios.get_balanced_flow,
         # sim_scenarios.get_bottleneck,
         # sim_scenarios.get_starvation,
         # sim_scenarios.get_backpressure_propagation,
 
-        sim_scenarios.get_atomic_second_order_system_imbalanced,
-        sim_scenarios.get_p_control_sequential_three_processes_imbalanced,
-        sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
+        # Experiment - Feedback Types
+        # sim_scenarios.get_atomic_second_order_system_balanced,
+        # sim_scenarios.get_atomic_second_order_system_imbalanced,
+        # sim_scenarios.get_p_control_sequential_three_processes_imbalanced,
         # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
-        # sim_scenarios.get_p_control_with_delay_sequential_three_processes_imbalanced,
+        # sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
+        sim_scenarios.get_p_control_with_delay_sequential_three_processes_imbalanced,
         # sim_scenarios.get_pi_control_with_delay_sequential_three_processes_imbalanced,
 
+        # Experiment - Feedback Direction
         # sim_scenarios.get_pi_control_sequential_three_processes_imbalanced,
         # sim_scenarios.get_input_pi_control_sequential_three_processes_imbalanced,
 
+        # Experiment - Feedback Types
         # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
         # sim_scenarios.get_pi_control_sequential_four_processes_balanced,
         # sim_scenarios.get_pi_control_sequential_five_processes_balanced,
@@ -1032,18 +1016,13 @@ def main() -> None:
         # sim_scenarios.get_pi_control_with_delay_sequential_four_processes_balanced,
         # sim_scenarios.get_pi_control_with_delay_sequential_five_processes_balanced,
 
-        # Scenarios to which failure is applied
-        # sim_scenarios.get_atomic_second_order_system_imbalanced,
+        # Experiment - Failure (apply parameter to run_individual)
+        # sim_scenarios.get_atomic_second_order_system_balanced,
         # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
 
-        # Scenarios to which surge is applied
-        # sim_scenarios.get_atomic_second_order_system_imbalanced,
+        # Experiment - Surge (apply parameter to run_individual)
+        # sim_scenarios.get_atomic_second_order_system_balanced,
         # sim_scenarios.get_pi_control_sequential_four_processes_balanced,
-
-
-        # sim_scenarios.get_a_single_oscillation,
-        # sim_scenarios.get_multiple_oscillations_input_f,
-        # sim_scenarios.get_multiple_oscillations_output_f,
     ]:
 
         sim_config, stability_config = scenario()
@@ -1057,7 +1036,6 @@ def main() -> None:
         run_stability_experiment(
             sim_config,
             stability_config,
-            debug=True
         )
 
 if __name__ == '__main__':
