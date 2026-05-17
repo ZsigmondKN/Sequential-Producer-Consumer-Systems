@@ -332,13 +332,13 @@ def plot_queue_occupancy_over_time(ax: plt.Axes, start_time: float, queue_logs: 
 
 def plot_results(simulation_state: SimulationState, start_time: float = 0.0, failures=None, surges=None) -> None:
     """Create one figure containing subplots."""
-    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(8, 6))
+    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(6, 4))
 
     plot_producer_consumer_rates(ax1, start_time, simulation_state.producer_logs, simulation_state.consumer_logs)
     plot_queue_occupancy_over_time(ax2, start_time, simulation_state.queue_logs, failures, surges)
 
     plt.tight_layout()
-    plt.subplots_adjust(hspace=0.45)
+    # plt.subplots_adjust(hspace=0.45)
     plt.show()
 
 # ==================================================================================================
@@ -622,7 +622,7 @@ def rerun_point(base_config, x_values, y_values, idx, stability_config):
 
 def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_matrix, drift_matrix, 
                            max_std, max_diff, max_drift, stability_config):
-    fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+    fig, axes = plt.subplots(2, 3, figsize=(10, 5))
     top_axes = axes[0]
     bottom_axes = axes[1]
 
@@ -671,7 +671,7 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
 
         logging.info(f"x_center = {x_center:.7f}, y_center = {y_center:.7f}")
 
-        ax.plot(x_center, y_center, 'ro', label='Maximum instability')
+        ax.plot(x_center, y_center, 'ro', label='Max Instability')
         ax.legend()
 
         x_param = stability_config["x_param"]
@@ -690,7 +690,7 @@ def plot_multiple_heatmaps(base_config, x_values, y_values, std_matrix, diff_mat
         ax.set_title(sim_title)
 
     plt.tight_layout()
-    plt.subplots_adjust(hspace=0.3)
+    # plt.subplots_adjust(hspace=0.3)
     plt.show()
 
 def run_stability_experiment(base_config: SimConfig, stability_config: dict):
@@ -907,6 +907,45 @@ processes={
                 consumer=ConsumerConfig(
                     count=1,
                     input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=proportional_gain,
+                    integral_gain=integral_gain,
+                    transport_delay=transport_delay,
+                ),
+            ),
+            ItemType.IRON_WIRE: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_WIRE,
+                    output=ItemType.IRON_MESH,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=proportional_gain,
+                    integral_gain=integral_gain,
+                    transport_delay=transport_delay,
+                ),
+            ),
+            ItemType.IRON_MESH: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_MESH,
+                    output=ItemType.IRON_FILTER,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=proportional_gain,
+                    integral_gain=integral_gain,
+                    transport_delay=transport_delay,
+                ),
+            ),
+            ItemType.IRON_FILTER: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_FILTER,
                     consumption_time=1.0,
                     reference_signal=50,
                     proportional_gain=proportional_gain,
@@ -976,7 +1015,7 @@ def main() -> None:
         # sim_scenarios.get_starvation,
         # sim_scenarios.get_backpressure_propagation,
 
-        # Experiment - Feedback Types
+        # Experiment - Feedback Mechanisms
         sim_scenarios.get_atomic_second_order_system_balanced,
         sim_scenarios.get_pi_control_sequential_three_processes_balanced,
         sim_scenarios.get_pi_control_with_delay_sequential_three_processes_balanced,
@@ -985,13 +1024,11 @@ def main() -> None:
         # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
         # sim_scenarios.get_input_pi_control_sequential_three_processes_balanced,
 
-        # Experiment - Feedback Types
-        # sim_scenarios.get_pi_control_sequential_three_processes_balanced,
-        # sim_scenarios.get_pi_control_sequential_four_processes_balanced,
-        # sim_scenarios.get_pi_control_sequential_five_processes_balanced,
-        # sim_scenarios.get_pi_control_with_delay_sequential_three_processes_balanced,
-        # sim_scenarios.get_pi_control_with_delay_sequential_four_processes_balanced,
+        # Experiment - Sequence Length
         # sim_scenarios.get_pi_control_with_delay_sequential_five_processes_balanced,
+
+        # Experiment - Damping Ratio
+        # sim_scenarios.get_pi_control_sequential_three_processes_balanced_damping,
 
         # Experiment - Failure (apply parameter to run_individual)
         # sim_scenarios.get_atomic_second_order_system_balanced,

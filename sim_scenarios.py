@@ -505,6 +505,141 @@ def get_pi_control_sequential_five_processes_balanced() -> tuple[SimConfig, dict
 
     return sim_config, stability_config
 
+def get_pi_control_with_delay_sequential_five_processes_balanced() -> tuple[SimConfig, dict]:
+    stability_config = {
+        "mode": "global",
+        "x_param": "global_proportional_gain",
+        "y_param": "global_transport_delay",
+        "x_values": np.linspace(0.0, 1.0, 25),
+        "y_values": np.linspace(1, 100, 25),
+    }
+    local_p_gain = 0.9632235
+    local_i_gain = 0.0006664
+    local_t_delay = 58.7300371
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=1000,
+        queue_interval=1.0,
+        use_feedback=True,
+        feedback_direction = FeedbackDirection.OUTPUT,
+        processes={
+            ItemType.IRON_INGOT: ProcessConfig(
+                queue_capacity=100,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                    transport_delay=local_t_delay
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_ROD,
+                    consumption_time=1.0,
+                    reference_signal=50, 
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                    transport_delay=local_t_delay
+                ),
+            ),
+            ItemType.IRON_ROD: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_ROD,
+                    output=ItemType.IRON_WIRE,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                    transport_delay=local_t_delay
+                ),
+            ),
+            ItemType.IRON_WIRE: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_WIRE,
+                    output=ItemType.IRON_MESH,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                    transport_delay=local_t_delay,
+                ),
+            ),
+            ItemType.IRON_MESH: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_MESH,
+                    consumption_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                    transport_delay=local_t_delay,
+                ),
+            ),
+        }
+    )
+
+    return sim_config, stability_config
+
+# ==================================================================================================
+# Closed loop - Damping Ratio
+# ==================================================================================================
+
+def get_pi_control_sequential_three_processes_balanced_damping() -> tuple[SimConfig, dict]:
+    stability_config = {
+        "mode": "global",
+        "x_param": "global_proportional_gain",
+        "y_param": "global_integral_gain",
+        "x_values": np.linspace(0.0, 1.0, 25),
+        "y_values": np.linspace(0.0, 0.1, 25),
+    }
+    local_p_gain = 0.5
+    local_i_gain = 0.0000
+    sim_config = SimConfig(
+        simulation_timeout_in_seconds=1000,
+        queue_interval=1.0,
+        use_feedback=True,
+        feedback_direction = FeedbackDirection.OUTPUT,
+        processes={
+            ItemType.IRON_INGOT: ProcessConfig(
+                queue_capacity=100,
+                producer=ProducerConfig(
+                    count=1,
+                    output=ItemType.IRON_INGOT,
+                    production_time=1.0,
+                    reference_signal=50,
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                ),
+                consumer=ConsumerConfig(
+                    count=1,
+                    input=ItemType.IRON_INGOT,
+                    output=ItemType.IRON_ROD,
+                    consumption_time=1.0,
+                    reference_signal=50, 
+                    proportional_gain=local_p_gain,
+                    integral_gain=local_i_gain,
+                ),
+            ),
+            ItemType.IRON_ROD: ProcessConfig(
+                queue_capacity=100,
+                consumer=ConsumerConfig(
+                    count=1, 
+                    input=ItemType.IRON_ROD, 
+                    consumption_time=1.0, 
+                ),
+            ),
+        }
+    )
+
+    return sim_config, stability_config
+
 # ==================================================================================================
 # Closed loop - Extra Imbalamce Study
 # ==================================================================================================
