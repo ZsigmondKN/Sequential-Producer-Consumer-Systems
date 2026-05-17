@@ -468,7 +468,7 @@ def run_simulation(sim_config: SimConfig, failures=None, surges=None) -> Simulat
 # ==================================================================================================
 
 def objective(trial):
-    test_proportional_gain = trial.suggest_float('proportional_gain', 0, 5)
+    test_proportional_gain = trial.suggest_float('proportional_gain', 0, 1)
     test_integral_gain = trial.suggest_float('integral_gain', 0, 1)
     test_transport_delay = trial.suggest_float('transport_delay', 0, 100)
 

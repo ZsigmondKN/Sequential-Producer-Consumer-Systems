@@ -265,9 +265,9 @@ def get_pi_control_with_delay_sequential_three_processes_balanced() -> tuple[Sim
         "x_values": np.linspace(0.0, 1.0, 25),
         "y_values": np.linspace(1, 100, 25),
     }
-    local_p_gain = 4.2089168
-    local_i_gain = 0.0001962
-    local_t_delay = 13.7446051
+    local_p_gain = 0.5727848
+    local_i_gain = 0.0148614
+    local_t_delay = 26.2283916
     sim_config = SimConfig(
         simulation_timeout_in_seconds=1000,
         queue_interval=1.0,
